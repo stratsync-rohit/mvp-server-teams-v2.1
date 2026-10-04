@@ -9,7 +9,12 @@ from typing import Any
 from src.clients.teams_client import TeamsClient
 from src.repositories.discovered_channel_repository import DiscoveredChannelRepository
 from src.repositories.team_installation_repository import TeamInstallationRepository
-from src.schemas.teams import DiscoveredChannel, TeamsContext, _as_mapping
+from src.schemas.teams import (
+    DiscoveredChannel,
+    InstallationSelectedChannel,
+    TeamsContext,
+    _as_mapping,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +146,48 @@ class TeamsService:
             await self.channel_repository.upsert(model)
             discovered.append(model)
         return discovered
+
+    async def register_selected_install_channel(
+        self, selected: InstallationSelectedChannel
+    ) -> DiscoveredChannel | None:
+        """Persist the channel explicitly selected during installation."""
+        tenant_id = _clean_channel_name(selected.tenant_id)
+        team_id = _clean_channel_name(selected.team_id)
+        channel_id = _clean_channel_name(selected.channel_id)
+        channel_name = _clean_channel_name(selected.channel_name)
+        if not tenant_id or not team_id or not channel_id or not channel_name:
+            return None
+
+        context = TeamsContext(
+            tenant_id=tenant_id,
+            team_id=team_id,
+            team_name=selected.team_name,
+            conversation_id=selected.conversation_id,
+            service_url=selected.service_url,
+        )
+        team_name = await self._resolve_team_name(context)
+        channel = DiscoveredChannel(
+            tenant_id=tenant_id,
+            team_id=team_id,
+            channel_id=channel_id,
+            team_name=team_name,
+            channel_name=channel_name,
+            conversation_id=selected.conversation_id,
+            service_url=selected.service_url,
+            available=True,
+        )
+        await self.channel_repository.upsert(channel)
+        logger.info(
+            "teams_install_selected_channel_registered",
+            extra={
+                "tenant_id": channel.tenant_id,
+                "team_id": channel.team_id,
+                "channel_id": channel.channel_id,
+                "channel_name": channel.channel_name,
+                "resolution_source": selected.resolution_source,
+            },
+        )
+        return channel
 
     async def register_channel_from_activity(
         self, turn_context: Any

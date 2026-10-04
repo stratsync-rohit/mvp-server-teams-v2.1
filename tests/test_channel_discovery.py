@@ -10,7 +10,7 @@ from src.bot.handlers.risk_bot import RiskBot
 from src.repositories.discovered_channel_repository import DiscoveredChannelRepository
 from src.services.installation_service import InstallationService
 from src.services.teams_service import TeamsService
-from src.schemas.teams import TeamsContext
+from src.schemas.teams import TeamsContext, extract_installation_selected_channel
 
 
 @pytest.mark.asyncio
@@ -127,6 +127,47 @@ async def test_single_team_id_result_without_name_is_not_fabricated_as_general(c
     assert channel_repository.saved[0].channel_id == "team-id"
     assert channel_repository.saved[0].channel_name is None
     assert "teams_channel_discovery_ambiguous_general_skipped" not in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_installation_selected_channel_upserts_real_name_after_normal_discovery():
+    class InstallationRepository:
+        async def upsert(self, installation):
+            self.saved = installation
+
+    class ChannelRepository:
+        def __init__(self):
+            self.saved = []
+
+        async def upsert(self, channel):
+            self.saved.append(channel)
+
+    class Client:
+        async def get_team_channels(self, turn_context, team_id):
+            return [SimpleNamespace(id=team_id)]
+
+    installation_repository = InstallationRepository()
+    channel_repository = ChannelRepository()
+    teams_service = TeamsService(Client(), channel_repository)
+    turn_context = SimpleNamespace(activity={
+        "type": "installationUpdate",
+        "serviceUrl": "https://teams.example",
+        "conversation": {"id": "installation-conversation"},
+        "channelData": {
+            "tenant": {"id": "tenant-id"},
+            "team": {"id": "team-id", "name": "Risk Team"},
+            "settings": {
+                "selectedChannel": {"id": "team-id", "name": " first-risk "},
+            },
+        },
+    })
+
+    await InstallationService(installation_repository, teams_service).add(turn_context)
+
+    assert [(channel.channel_id, channel.channel_name) for channel in channel_repository.saved] == [
+        ("team-id", None),
+        ("team-id", "first-risk"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -342,3 +383,117 @@ async def test_installation_update_never_uses_activity_registration_path():
         _channel_activity("team-id", activity_type="installationUpdate")
     ) is None
     assert repository.saved == []
+
+
+@pytest.mark.parametrize(
+    ("channel_data", "expected_source"),
+    [
+        (
+            {"settings": {"selectedChannel": {"id": "settings-id", "name": " settings-name "}}},
+            "settings.selectedChannel",
+        ),
+        (
+            SimpleNamespace(settings=SimpleNamespace(
+                selected_channel=SimpleNamespace(id="sdk-id", name=" sdk-name ")
+            )),
+            "settings.selected_channel",
+        ),
+        (
+            {"selectedChannel": {"id": "direct-id", "name": " direct-name "}},
+            "channelData.selectedChannel",
+        ),
+        (
+            {"selected_channel": {"id": "snake-id", "name": " snake-name "}},
+            "channelData.selected_channel",
+        ),
+        (
+            {"channel": {"id": "channel-id", "name": " channel-name "}},
+            "channelData.channel",
+        ),
+    ],
+)
+def test_installation_selected_channel_extraction_supports_provider_shapes(
+    channel_data, expected_source
+):
+    selected = extract_installation_selected_channel({
+        "serviceUrl": " https://teams.example ",
+        "conversation": {"id": "conversation-id"},
+        "channelData": {
+            "tenant": {"id": "tenant-id"},
+            "team": {"id": "team-id", "name": "Risk Team"},
+            **(
+                vars(channel_data)
+                if isinstance(channel_data, SimpleNamespace)
+                else channel_data
+            ),
+        },
+    })
+
+    assert selected is not None
+    assert selected.channel_id.endswith("-id")
+    assert selected.channel_name.endswith("-name")
+    assert selected.resolution_source == expected_source
+    assert selected.service_url == "https://teams.example"
+
+
+def test_installation_selected_channel_accepts_team_id_with_explicit_name():
+    selected = extract_installation_selected_channel({
+        "conversation": {"id": "installation-conversation"},
+        "channelData": {
+            "tenant": {"id": "tenant-id"},
+            "team": {"id": "team-id"},
+            "settings": {"selectedChannel": {"id": "team-id", "name": " first-risk "}},
+        },
+    })
+
+    assert selected is not None
+    assert selected.channel_id == "team-id"
+    assert selected.channel_name == "first-risk"
+
+
+def test_installation_selected_channel_does_not_fabricate_missing_name():
+    selected = extract_installation_selected_channel({
+        "conversation": {"id": "installation-conversation"},
+        "channelData": {
+            "tenant": {"id": "tenant-id"},
+            "team": {"id": "team-id"},
+            "settings": {"selectedChannel": {"id": "team-id"}},
+        },
+    })
+
+    assert selected is None
+
+
+def test_installation_selected_channel_uses_safe_channel_conversation_name_fallback():
+    selected = extract_installation_selected_channel({
+        "conversation": {
+            "id": "conversation-id",
+            "name": " first-risk ",
+            "conversationType": "channel",
+        },
+        "channelData": {
+            "tenant": {"id": "tenant-id"},
+            "team": {"id": "team-id"},
+            "channel": {"id": "channel-id"},
+        },
+    })
+
+    assert selected is not None
+    assert selected.channel_name == "first-risk"
+
+
+def test_installation_selected_channel_ignores_personal_conversation_name():
+    selected = extract_installation_selected_channel({
+        "conversation": {
+            "id": "conversation-id",
+            "name": " personal-chat ",
+            "conversationType": "personal",
+        },
+        "channelData": {
+            "tenant": {"id": "tenant-id"},
+            "team": {"id": "team-id"},
+            "channel": {"id": "channel-id"},
+        },
+    })
+
+    assert selected is None

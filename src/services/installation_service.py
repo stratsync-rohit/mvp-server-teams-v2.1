@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.repositories.team_installation_repository import TeamInstallationRepository
 from src.repositories.discovered_channel_repository import DiscoveredChannelRepository
 from src.schemas.installation import DiscoveredChannelResponse, InstallationResponse
-from src.schemas.teams import TeamInstallation, TeamsContext
+from src.schemas.teams import (
+    TeamInstallation,
+    TeamsContext,
+    extract_installation_selected_channel,
+)
 from src.services.teams_service import TeamsService
+
+logger = logging.getLogger(__name__)
 
 
 class InstallationService:
@@ -75,6 +82,35 @@ class InstallationService:
             bot_id=context.recipient_id,
         ))
         await self.teams_service.discover_channels(turn_context, context)
+
+        selected_channel = extract_installation_selected_channel(turn_context.activity)
+        if selected_channel is None:
+            logger.info(
+                "teams_install_selected_channel_missing",
+                extra={
+                    "tenant_id": context.tenant_id,
+                    "team_id": context.team_id,
+                    "channel_id": None,
+                    "channel_name": None,
+                    "resolution_source": None,
+                },
+            )
+            return
+
+        logger.info(
+            "teams_install_selected_channel_found",
+            extra={
+                "tenant_id": selected_channel.tenant_id or context.tenant_id,
+                "team_id": selected_channel.team_id or context.team_id,
+                "channel_id": selected_channel.channel_id,
+                "channel_name": selected_channel.channel_name,
+                "resolution_source": selected_channel.resolution_source,
+            },
+        )
+        register = getattr(self.teams_service, "register_selected_install_channel", None)
+        if register is None:
+            return
+        await register(selected_channel)
 
     async def remove(self, turn_context: Any) -> None:
         """Soft-deactivate an installation from an authenticated activity."""
