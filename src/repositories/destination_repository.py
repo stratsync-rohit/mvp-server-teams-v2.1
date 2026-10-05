@@ -27,6 +27,34 @@ class DestinationRepository(MongoRepository):
         """Fetch a destination by deterministic ID."""
         return await maybe_await(self.collection.find_one({"destination_id": destination_id}))
 
+    async def get_by_channel(
+        self, tenant_id: str, team_id: str, channel_id: str
+    ) -> dict[str, Any] | None:
+        """Fetch an existing destination by tenant-isolated channel identity."""
+        return await maybe_await(self.collection.find_one({
+            "tenant_id": tenant_id, "team_id": team_id, "channel_id": channel_id,
+        }))
+
+    async def update_channel_name(
+        self, tenant_id: str, team_id: str, channel_id: str, channel_name: str
+    ) -> None:
+        """Update only the trusted display name of an existing destination."""
+        await maybe_await(self.collection.update_one(
+            {"tenant_id": tenant_id, "team_id": team_id, "channel_id": channel_id},
+            {"$set": {"channel_name": channel_name, "updated_at": utcnow()}},
+            upsert=False,
+        ))
+
+    async def mark_inactive_for_channel(
+        self, tenant_id: str, team_id: str, channel_id: str
+    ) -> None:
+        """Deactivate only an existing destination for one channel."""
+        await maybe_await(self.collection.update_one(
+            {"tenant_id": tenant_id, "team_id": team_id, "channel_id": channel_id},
+            {"$set": {"is_active": False, "updated_at": utcnow()}},
+            upsert=False,
+        ))
+
     async def list_active_for_team(
         self, tenant_id: str, team_id: str
     ) -> list[dict[str, Any]]:

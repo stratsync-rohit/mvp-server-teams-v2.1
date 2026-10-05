@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DiscoveredChannelResponse(BaseModel):
-    """Public-safe connected channel metadata."""
+    """Public-safe discovered channel metadata and connection status."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -14,6 +14,7 @@ class DiscoveredChannelResponse(BaseModel):
     channel_name: str | None = None
     is_primary: bool = False
     is_active: bool = True
+    connected: bool = False
     team_id: str
     team_name: str | None = None
     tenant_id: str

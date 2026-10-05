@@ -67,11 +67,13 @@ class TeamsService:
 
     def __init__(self, client: TeamsClient, channel_repository: DiscoveredChannelRepository,
                  installation_repository: TeamInstallationRepository | None = None,
-                 destination_repository: Any | None = None) -> None:
+                 destination_repository: Any | None = None,
+                 destination_service: Any | None = None) -> None:
         self.client = client
         self.channel_repository = channel_repository
         self.installation_repository = installation_repository
         self.destination_repository = destination_repository
+        self.destination_service = destination_service
 
     async def _resolve_team_name(self, context: TeamsContext) -> str | None:
         """Resolve a missing team name from the persisted installation context."""
@@ -249,7 +251,7 @@ class TeamsService:
         return channel
 
     async def handle_conversation_update(self, turn_context: Any) -> DiscoveredChannel | None:
-        """Handle channel-created and team-deleted Teams lifecycle events."""
+        """Handle channel rename/create and team-deleted Teams lifecycle events."""
         activity = turn_context.activity
         activity_data = _as_mapping(activity)
         activity_type = activity_data.get("type") or getattr(activity, "type", None)
@@ -261,6 +263,29 @@ class TeamsService:
             return None
 
         context = TeamsContext.from_activity(activity)
+        if event_type == "channelRenamed":
+            return await self._handle_channel_renamed(context, channel_data)
+        if event_type == "channelMemberAdded":
+            return await self._handle_channel_member_added(
+                activity_data, context, channel_data
+            )
+        if event_type == "channelMemberRemoved":
+            return await self._handle_channel_member_removed(
+                activity_data, context, channel_data
+            )
+        if event_type == "teamMemberAdded":
+            logger.info(
+                "teams_team_member_event_ignored_for_destination",
+                extra={
+                    "tenant_id": _clean_channel_name(context.tenant_id),
+                    "team_id": _clean_channel_name(context.team_id),
+                    "channel_id": None,
+                    "channel_name": None,
+                    "is_primary": False,
+                },
+            )
+            return None
+
         if event_type == "teamDeleted":
             if not context.tenant_id or not context.team_id:
                 logger.info(
@@ -347,3 +372,266 @@ class TeamsService:
             },
         )
         return channel
+
+    async def _handle_channel_renamed(
+        self, context: TeamsContext, channel_data: Mapping[str, Any]
+    ) -> None:
+        """Enrich existing channel records from Teams' authoritative rename event."""
+        channel = _as_mapping(channel_data.get("channel"))
+        tenant_id = _clean_channel_name(context.tenant_id)
+        team_id = _clean_channel_name(context.team_id)
+        channel_id = _clean_channel_name(_value(channel, "id"))
+        channel_name = _clean_channel_name(_value(channel, "name"))
+
+        is_primary = bool(channel_id and team_id and channel_id == team_id)
+        if not tenant_id or not team_id or not channel_id or not channel_name:
+            logger.info(
+                "teams_channel_renamed_skipped",
+                extra={
+                    "tenant_id": tenant_id,
+                    "team_id": team_id,
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "is_primary": is_primary,
+                },
+            )
+            return None
+
+        get_discovered = getattr(self.channel_repository, "get", None)
+        discovered = (
+            await get_discovered(tenant_id, team_id, channel_id)
+            if get_discovered is not None
+            else None
+        )
+        destination = None
+        get_destination = getattr(self.destination_repository, "get_by_channel", None)
+        if get_destination is not None:
+            destination = await get_destination(tenant_id, team_id, channel_id)
+
+        old_name = _clean_channel_name(_value(discovered, "channel_name"))
+        if old_name is None:
+            old_name = _clean_channel_name(_value(destination, "channel_name"))
+
+        logger.info(
+            "teams_channel_renamed_received",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "old_name": old_name,
+                "new_name": channel_name,
+                "is_primary": is_primary,
+            },
+        )
+
+        updated = False
+        update_discovered = getattr(self.channel_repository, "update_channel_name", None)
+        if discovered is not None and update_discovered is not None:
+            await update_discovered(tenant_id, team_id, channel_id, channel_name)
+            updated = True
+
+        update_destination = getattr(self.destination_repository, "update_channel_name", None)
+        if destination is not None and update_destination is not None:
+            await update_destination(tenant_id, team_id, channel_id, channel_name)
+            updated = True
+
+        if updated:
+            logger.info(
+                "teams_channel_name_updated",
+                extra={
+                    "tenant_id": tenant_id,
+                    "team_id": team_id,
+                    "channel_id": channel_id,
+                    "old_name": old_name,
+                    "new_name": channel_name,
+                    "is_primary": is_primary,
+                },
+            )
+        return None
+
+    async def _handle_channel_member_added(
+        self,
+        activity_data: Mapping[str, Any],
+        context: TeamsContext,
+        channel_data: Mapping[str, Any],
+    ) -> None:
+        """Connect only the channel where the bot itself was added."""
+        channel = _as_mapping(channel_data.get("channel"))
+        tenant_id = _clean_channel_name(context.tenant_id)
+        team_id = _clean_channel_name(context.team_id)
+        channel_id = _clean_channel_name(_value(channel, "id"))
+        channel_name = _clean_channel_name(_value(channel, "name"))
+        is_primary = bool(channel_id and team_id and channel_id == team_id)
+
+        logger.info(
+            "teams_channel_member_added_received",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "is_primary": is_primary,
+            },
+        )
+        if not tenant_id or not team_id or not channel_id:
+            return None
+        if not self._bot_is_member(activity_data, context.recipient_id, "membersAdded"):
+            return None
+
+        logger.info(
+            "teams_bot_added_to_channel",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "is_primary": is_primary,
+            },
+        )
+
+        get_channel = getattr(self.channel_repository, "get", None)
+        existing = (
+            await get_channel(tenant_id, team_id, channel_id)
+            if get_channel is not None
+            else None
+        )
+        existing_name = _clean_channel_name(_value(existing, "channel_name"))
+        team_name = await self._resolve_team_name(context)
+        channel = DiscoveredChannel(
+            tenant_id=tenant_id,
+            team_id=team_id,
+            channel_id=channel_id,
+            team_name=team_name,
+            channel_name=channel_name or existing_name,
+            conversation_id=context.conversation_id,
+            service_url=context.service_url,
+            available=True,
+        )
+        await self.channel_repository.upsert(channel)
+
+        if self.destination_service is None:
+            return None
+        try:
+            destination = await self.destination_service.resolve_discovered_channel(
+                tenant_id, team_id, channel_id
+            )
+        except Exception:
+            logger.exception(
+                "teams_channel_destination_resolution_failed",
+                extra={
+                    "tenant_id": tenant_id,
+                    "team_id": team_id,
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "is_primary": is_primary,
+                },
+            )
+            return None
+        if destination is None:
+            logger.error(
+                "teams_channel_destination_resolution_failed",
+                extra={
+                    "tenant_id": tenant_id,
+                    "team_id": team_id,
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "is_primary": is_primary,
+                },
+            )
+            return None
+
+        logger.info(
+            "teams_channel_destination_resolved",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": _value(destination, "channel_name") or channel_name,
+                "is_primary": is_primary,
+            },
+        )
+        return None
+
+    async def _handle_channel_member_removed(
+        self,
+        activity_data: Mapping[str, Any],
+        context: TeamsContext,
+        channel_data: Mapping[str, Any],
+    ) -> None:
+        """Deactivate only the bot's destination for the removed channel."""
+        channel = _as_mapping(channel_data.get("channel"))
+        tenant_id = _clean_channel_name(context.tenant_id)
+        team_id = _clean_channel_name(context.team_id)
+        channel_id = _clean_channel_name(_value(channel, "id"))
+        channel_name = _clean_channel_name(_value(channel, "name"))
+        is_primary = bool(channel_id and team_id and channel_id == team_id)
+
+        logger.info(
+            "teams_channel_member_removed_received",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "is_primary": is_primary,
+            },
+        )
+        if not tenant_id or not team_id or not channel_id:
+            return None
+        if not self._bot_is_member(activity_data, context.recipient_id, "membersRemoved"):
+            return None
+
+        logger.info(
+            "teams_bot_removed_from_channel",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "is_primary": is_primary,
+            },
+        )
+
+        get_destination = getattr(self.destination_repository, "get_by_channel", None)
+        destination = (
+            await get_destination(tenant_id, team_id, channel_id)
+            if get_destination is not None
+            else None
+        )
+        if destination is None:
+            return None
+        mark_inactive = getattr(
+            self.destination_repository, "mark_inactive_for_channel", None
+        )
+        if mark_inactive is None:
+            return None
+        await mark_inactive(tenant_id, team_id, channel_id)
+        logger.info(
+            "teams_channel_destination_deactivated",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name or _value(destination, "channel_name"),
+                "is_primary": is_primary,
+            },
+        )
+        return None
+
+    @staticmethod
+    def _bot_is_member(
+        activity_data: Mapping[str, Any], recipient_id: str | None, field: str
+    ) -> bool:
+        """Return whether the activity's member list contains the bot recipient."""
+        recipient_id = _clean_channel_name(recipient_id)
+        if not recipient_id:
+            return False
+        members = activity_data.get(field) or activity_data.get(
+            "members_added" if field == "membersAdded" else "members_removed"
+        )
+        if not isinstance(members, (list, tuple)):
+            return False
+        return any(
+            _clean_channel_name(_value(member, "id")) == recipient_id
+            for member in members
+        )

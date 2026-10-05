@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.clients.teams_conversation_client import TeamsConversationClient
@@ -9,6 +10,8 @@ from src.exceptions import AppError
 from src.repositories.discovered_channel_repository import DiscoveredChannelRepository
 from src.repositories.destination_repository import DestinationRepository
 from src.schemas.destination import Destination, build_destination_id
+
+logger = logging.getLogger(__name__)
 
 
 class DestinationService:
@@ -30,6 +33,31 @@ class DestinationService:
             raise AppError("DISCOVERED_CHANNEL_NOT_FOUND", "The Teams channel was not discovered.", 404)
         if not channel.get("available", True):
             raise AppError("DISCOVERED_CHANNEL_UNAVAILABLE", "The Teams channel is unavailable.", 409)
+
+        channel_name = channel.get("channel_name")
+        is_primary = channel_id == team_id
+        logger.info(
+            "teams_destination_connect_requested",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "is_primary": is_primary,
+            },
+        )
+        get_existing = getattr(self.repository, "get_by_channel", None)
+        existing = (
+            await get_existing(tenant_id, team_id, channel_id)
+            if get_existing is not None
+            else None
+        )
+        existing_active = (
+            existing.get("is_active")
+            if isinstance(existing, dict)
+            else getattr(existing, "is_active", None)
+        )
+        was_inactive = existing is not None and existing_active is False
 
         reference = self.conversation_client.build_channel_reference(
             tenant_id=channel.get("tenant_id", ""),
@@ -55,6 +83,16 @@ class DestinationService:
             is_active=True,
         )
         await self.repository.upsert(destination)
+        logger.info(
+            "teams_destination_reactivated" if was_inactive else "teams_destination_connected",
+            extra={
+                "tenant_id": tenant_id,
+                "team_id": team_id,
+                "channel_id": channel_id,
+                "channel_name": destination.channel_name,
+                "is_primary": is_primary,
+            },
+        )
         return destination
 
     async def resolve(self, route: dict[str, Any]) -> Destination | None:

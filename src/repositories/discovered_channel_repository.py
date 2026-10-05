@@ -30,6 +30,16 @@ class DiscoveredChannelRepository(MongoRepository):
             "tenant_id": tenant_id, "team_id": team_id, "channel_id": channel_id,
         }))
 
+    async def update_channel_name(
+        self, tenant_id: str, team_id: str, channel_id: str, channel_name: str
+    ) -> None:
+        """Update only the trusted display name of an existing channel."""
+        await maybe_await(self.collection.update_one(
+            {"tenant_id": tenant_id, "team_id": team_id, "channel_id": channel_id},
+            {"$set": {"channel_name": channel_name, "updated_at": utcnow()}},
+            upsert=False,
+        ))
+
     async def list_for_team(self, tenant_id: str, team_id: str) -> list[dict[str, Any]]:
         """Fetch only channels belonging to one tenant-isolated team."""
         cursor = self.collection.find({"tenant_id": tenant_id, "team_id": team_id})

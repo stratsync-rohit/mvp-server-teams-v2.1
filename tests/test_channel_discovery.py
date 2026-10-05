@@ -130,7 +130,7 @@ async def test_single_team_id_result_without_name_is_not_fabricated_as_general(c
 
 
 @pytest.mark.asyncio
-async def test_installation_selected_channel_upserts_real_name_after_normal_discovery():
+async def test_installation_selected_channel_does_not_create_destination_or_mutate_discovery():
     class InstallationRepository:
         async def upsert(self, installation):
             self.saved = installation
@@ -166,7 +166,6 @@ async def test_installation_selected_channel_upserts_real_name_after_normal_disc
 
     assert [(channel.channel_id, channel.channel_name) for channel in channel_repository.saved] == [
         ("team-id", None),
-        ("team-id", "first-risk"),
     ]
 
 
