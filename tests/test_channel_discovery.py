@@ -451,7 +451,7 @@ def test_installation_selected_channel_accepts_team_id_with_explicit_name():
     assert selected.channel_name == "first-risk"
 
 
-def test_installation_selected_channel_does_not_fabricate_missing_name():
+def test_installation_selected_primary_channel_allows_missing_name():
     selected = extract_installation_selected_channel({
         "conversation": {"id": "installation-conversation"},
         "channelData": {
@@ -461,7 +461,9 @@ def test_installation_selected_channel_does_not_fabricate_missing_name():
         },
     })
 
-    assert selected is None
+    assert selected is not None
+    assert selected.channel_id == "team-id"
+    assert selected.channel_name is None
 
 
 def test_installation_selected_channel_uses_safe_channel_conversation_name_fallback():

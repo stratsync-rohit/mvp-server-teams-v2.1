@@ -66,10 +66,12 @@ class TeamsService:
     """Discover and persist channels through the Teams client boundary."""
 
     def __init__(self, client: TeamsClient, channel_repository: DiscoveredChannelRepository,
-                 installation_repository: TeamInstallationRepository | None = None) -> None:
+                 installation_repository: TeamInstallationRepository | None = None,
+                 destination_repository: Any | None = None) -> None:
         self.client = client
         self.channel_repository = channel_repository
         self.installation_repository = installation_repository
+        self.destination_repository = destination_repository
 
     async def _resolve_team_name(self, context: TeamsContext) -> str | None:
         """Resolve a missing team name from the persisted installation context."""
@@ -155,7 +157,7 @@ class TeamsService:
         team_id = _clean_channel_name(selected.team_id)
         channel_id = _clean_channel_name(selected.channel_id)
         channel_name = _clean_channel_name(selected.channel_name)
-        if not tenant_id or not team_id or not channel_id or not channel_name:
+        if not tenant_id or not team_id or not channel_id:
             return None
 
         context = TeamsContext(
@@ -282,6 +284,11 @@ class TeamsService:
                 await self.installation_repository.mark_inactive(
                     context.tenant_id, context.team_id
                 )
+            mark_destinations_inactive = getattr(
+                self.destination_repository, "mark_inactive_for_team", None
+            )
+            if mark_destinations_inactive is not None:
+                await mark_destinations_inactive(context.tenant_id, context.team_id)
             return None
 
         if event_type != "channelCreated":

@@ -56,19 +56,22 @@ def create_app() -> FastAPI:
         mongo = MongoManager(settings)
         await mongo.start()
         adapter = create_adapter(settings)
+        destination_repository = DestinationRepository(mongo=mongo)
         channel_repository = DiscoveredChannelRepository(mongo=mongo)
         installation_repository = TeamInstallationRepository(mongo=mongo)
         teams_service = TeamsService(
-            TeamsClient(), channel_repository, installation_repository
+            TeamsClient(), channel_repository, installation_repository,
+            destination_repository,
+        )
+        conversation_client = TeamsConversationClient(adapter, settings.microsoft_app_id)
+        destination_service = DestinationService(
+            destination_repository, conversation_client, channel_repository
         )
         installation_service = InstallationService(
             repository=installation_repository,
             teams_service=teams_service,
-            channel_repository=channel_repository,
-        )
-        conversation_client = TeamsConversationClient(adapter, settings.microsoft_app_id)
-        destination_service = DestinationService(
-            DestinationRepository(mongo=mongo), conversation_client, channel_repository
+            destination_repository=destination_repository,
+            destination_service=destination_service,
         )
         # NotificationService is an internal dependency of domain callers; the
         # inbound bot only needs installation, reaction, and idempotency routes.

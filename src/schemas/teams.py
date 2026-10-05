@@ -76,7 +76,7 @@ class InstallationSelectedChannel(BaseModel):
     team_id: str | None = None
     team_name: str | None = None
     channel_id: str
-    channel_name: str
+    channel_name: str | None = None
     conversation_id: str | None = None
     service_url: str | None = None
     resolution_source: str
@@ -153,7 +153,14 @@ def extract_installation_selected_channel(
             if conversation_id and conversation_name and associated:
                 channel_name = conversation_name
 
-        if not channel_name:
+        # A personal conversation's channel-shaped metadata is not evidence
+        # of an installation-selected Teams channel.
+        if (
+            not channel_name
+            and source == "channelData.channel"
+            and conversation_type
+            and conversation_type.lower() == "personal"
+        ):
             continue
 
         return InstallationSelectedChannel(

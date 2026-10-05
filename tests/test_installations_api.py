@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from src.api.dependencies import Container
 from src.application import create_app
-from src.schemas.installation import InstallationResponse
+from src.schemas.installation import DiscoveredChannelResponse, InstallationResponse
 from src.services.installation_service import InstallationService
 
 
@@ -28,8 +28,8 @@ def _installation(tenant_id: str, team_id: str) -> dict:
     }
 
 
-def _channel(tenant_id: str, team_id: str, channel_id: str) -> dict:
-    """Build a persistence-shaped channel fixture."""
+def _destination(tenant_id: str, team_id: str, channel_id: str, *, active: bool = True) -> dict:
+    """Build a persistence-shaped destination fixture."""
     timestamp = datetime(2026, 9, 29, tzinfo=timezone.utc)
     return {
         "_id": "must-not-leak",
@@ -40,10 +40,9 @@ def _channel(tenant_id: str, team_id: str, channel_id: str) -> dict:
         "team_name": f"Team {team_id}",
         "conversation_id": f"conversation-{team_id}",
         "service_url": "https://smba.example",
-        "available": True,
-        "discovered_at": timestamp,
+        "is_active": active,
         "updated_at": timestamp,
-        "access_token": "must-not-leak",
+        "conversation_reference": {"secret": "must-not-leak"},
     }
 
 
@@ -52,11 +51,11 @@ def _aggregated_service() -> InstallationService:
         async def list_active(self):
             return [_installation("tenant-a", "team-1"), _installation("tenant-b", "team-1")]
 
-    class ChannelRepository:
-        async def list_for_team(self, tenant_id, team_id):
-            return [_channel(tenant_id, team_id, f"channel-{tenant_id}")]
+    class DestinationRepository:
+        async def list_active_for_team(self, tenant_id, team_id):
+            return [_destination(tenant_id, team_id, f"channel-{tenant_id}")]
 
-    return InstallationService(InstallationRepository(), object(), ChannelRepository())
+    return InstallationService(InstallationRepository(), object(), DestinationRepository())
 
 
 def test_installations_service_groups_channels_by_tenant_and_team():
@@ -108,12 +107,63 @@ def test_installations_service_uses_active_installations_only():
     assert [item.team_id for item in data] == ["active-team"]
 
 
+def test_installations_service_reads_connected_destinations_only():
+    import asyncio
+
+    class InstallationRepository:
+        async def list_active(self):
+            return [_installation("tenant-a", "team-1")]
+
+    class DestinationRepository:
+        async def list_active_for_team(self, tenant_id, team_id):
+            assert (tenant_id, team_id) == ("tenant-a", "team-1")
+            return [_destination("tenant-a", "team-1", "test2")]
+
+        async def list_for_team(self, tenant_id, team_id):
+            raise AssertionError("discovered channels must not feed connected-channel API")
+
+    data = asyncio.run(
+        InstallationService(
+            InstallationRepository(), object(), DestinationRepository()
+        ).list_installations()
+    )
+
+    assert [channel.channel_id for channel in data[0].channels] == ["test2"]
+
+
+def test_installations_service_excludes_inactive_destinations():
+    import asyncio
+
+    class InstallationRepository:
+        async def list_active(self):
+            return [_installation("tenant-a", "team-1")]
+
+    class DestinationRepository:
+        async def list_active_for_team(self, tenant_id, team_id):
+            documents = [
+                _destination("tenant-a", "team-1", "test2"),
+                _destination("tenant-a", "team-1", "test3", active=False),
+            ]
+            return [document for document in documents if document["is_active"] is True]
+
+    data = asyncio.run(
+        InstallationService(
+            InstallationRepository(), object(), DestinationRepository()
+        ).list_installations()
+    )
+
+    assert [channel.channel_id for channel in data[0].channels] == ["test2"]
+
+
 def test_get_installations_returns_safe_enveloped_data():
     class InstallationServiceDouble:
         async def list_installations(self):
             return [InstallationResponse(**{
                 "tenant_id": "tenant-a", "team_id": "team-1", "team_name": "Bot test",
-                "channels": [],
+                "channels": [DiscoveredChannelResponse(
+                    tenant_id="tenant-a", team_id="team-1", channel_id="test2",
+                    channel_name="test2",
+                )],
             })]
 
     app = create_app()
@@ -126,7 +176,7 @@ def test_get_installations_returns_safe_enveloped_data():
     body = response.json()
     assert body["success"] is True
     assert body["data"][0]["team_name"] == "Bot test"
-    assert body["data"][0]["channels"] == []
+    assert [channel["channel_id"] for channel in body["data"][0]["channels"]] == ["test2"]
     assert body["error"] is None
 
     def keys(value):
@@ -140,6 +190,31 @@ def test_get_installations_returns_safe_enveloped_data():
     assert "_id" not in response_keys
     assert "microsoft_app_password" not in response_keys
     assert "access_token" not in response_keys
+
+
+def test_get_installations_returns_primary_destination_metadata():
+    class InstallationServiceDouble:
+        async def list_installations(self):
+            return [InstallationResponse(**{
+                "tenant_id": "tenant-a", "team_id": "team-a", "team_name": "Bot test",
+                "channels": [DiscoveredChannelResponse(
+                    tenant_id="tenant-a", team_id="team-a", channel_id="team-a",
+                    channel_name=None, is_primary=True, is_active=True,
+                )],
+            })]
+
+    app = create_app()
+    app.state.container = Container(
+        adapter=object(), bot=object(), installation_service=InstallationServiceDouble()
+    )
+    response = TestClient(app).get("/api/installations")
+
+    assert response.status_code == 200
+    channel = response.json()["data"][0]["channels"][0]
+    assert channel["channel_id"] == "team-a"
+    assert channel["channel_name"] is None
+    assert channel["is_primary"] is True
+    assert channel["is_active"] is True
 
 
 def test_get_installations_returns_empty_data_when_no_installations():

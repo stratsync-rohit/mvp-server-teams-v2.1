@@ -26,3 +26,26 @@ class DestinationRepository(MongoRepository):
     async def get(self, destination_id: str) -> dict[str, Any] | None:
         """Fetch a destination by deterministic ID."""
         return await maybe_await(self.collection.find_one({"destination_id": destination_id}))
+
+    async def list_active_for_team(
+        self, tenant_id: str, team_id: str
+    ) -> list[dict[str, Any]]:
+        """Fetch only active destinations belonging to one tenant/team."""
+        cursor = self.collection.find({
+            "tenant_id": tenant_id,
+            "team_id": team_id,
+            "is_active": True,
+        })
+        if hasattr(cursor, "to_list"):
+            return await cursor.to_list(length=None)
+        if hasattr(cursor, "__aiter__"):
+            return [document async for document in cursor]
+        result = await maybe_await(cursor)
+        return list(result or [])
+
+    async def mark_inactive_for_team(self, tenant_id: str, team_id: str) -> None:
+        """Soft-deactivate every destination for one tenant-isolated team."""
+        await maybe_await(self.collection.update_many(
+            {"tenant_id": tenant_id, "team_id": team_id, "is_active": True},
+            {"$set": {"is_active": False, "updated_at": utcnow()}},
+        ))
