@@ -210,7 +210,7 @@ async def test_installations_api_data_marks_primary_destination_without_inventin
 
     assert [channel.model_dump() for channel in installation.channels] == [{
         "channel_id": "team-1",
-        "channel_name": None,
+        "channel_name": "General",
         "is_primary": True,
         "is_active": True,
         "connected": True,

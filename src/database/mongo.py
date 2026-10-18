@@ -80,12 +80,14 @@ class MongoManager:
             "notifications": [[("teams_message_id", 1)], [("destination_id", 1), ("created_at", -1)]],
             "notification_reactions": [[("notification_id", 1), ("reaction", 1), ("user_aad_id", 1)]],
             "processed_activities": [[("activity_id", 1)]],
+            "risks": [[("risk_id", 1)]],
         }
         for collection_name, collection_indexes in indexes.items():
             collection = self.database[collection_name]
             for index in collection_indexes:
                 unique = collection_name in {
-                    "teams_installations", "teams_discovered_channels", "destinations", "processed_activities"
+                    "teams_installations", "teams_discovered_channels", "destinations", "processed_activities",
+                    "risks",
                 }
                 try:
                     await collection.create_index(index, background=True, unique=unique)

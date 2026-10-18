@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from src.bot.diagnostics.activity_logger import log_teams_debug
 from src.repositories._base import MongoRepository, maybe_await, utcnow
 from src.schemas.teams import TeamInstallation
 
@@ -11,6 +12,14 @@ class TeamInstallationRepository(MongoRepository):
 
     collection_name = "teams_installations"
 
+    @staticmethod
+    def _write_status(result: Any) -> dict[str, Any]:
+        return {
+            "matched_count": getattr(result, "matched_count", None),
+            "modified_count": getattr(result, "modified_count", None),
+            "upserted": getattr(result, "upserted_id", None) is not None,
+        }
+
     async def upsert(self, installation: TeamInstallation | dict[str, Any]) -> None:
         """Create or update an installation without deleting history."""
         data = installation.model_dump() if isinstance(installation, TeamInstallation) else dict(installation)
@@ -19,11 +28,19 @@ class TeamInstallationRepository(MongoRepository):
         data["updated_at"] = now
         data["is_active"] = True
         data["uninstalled_at"] = None
-        await maybe_await(self.collection.update_one(
+        fields = {
+            "collection": self.collection_name,
+            "operation": "upsert",
+            "tenant_id": data["tenant_id"],
+            "team_id": data["team_id"],
+        }
+        log_teams_debug("mongo installation upsert", **fields)
+        result = await maybe_await(self.collection.update_one(
             {"tenant_id": data["tenant_id"], "team_id": data["team_id"]},
             {"$set": data, "$setOnInsert": {"installed_at": installed_at}},
             upsert=True,
         ))
+        log_teams_debug("mongo installation upsert complete", **fields, **self._write_status(result))
 
     async def mark_inactive(self, tenant_id: str, team_id: str) -> None:
         """Mark an installation inactive while retaining its record."""

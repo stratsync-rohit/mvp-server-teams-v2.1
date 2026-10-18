@@ -32,6 +32,19 @@ class RiskRepository(MongoRepository):
             return None
         return self._without_mongo_id(document)
 
+    async def get_any_by_risk_id(self, risk_id: str) -> dict[str, Any] | None:
+        """Find a logical ID regardless of lifecycle state for duplicate checks."""
+        document = await maybe_await(self.collection.find_one({"risk_id": risk_id}))
+        if document is None:
+            return None
+        return self._without_mongo_id(document)
+
+    async def create(self, document: dict[str, Any]) -> dict[str, Any]:
+        """Insert one new risk and return its safe persistence representation."""
+        data = dict(document)
+        await maybe_await(self.collection.insert_one(data))
+        return self._without_mongo_id(data)
+
     @staticmethod
     def _without_mongo_id(document: dict[str, Any]) -> dict[str, Any]:
         """Copy a persistence document while omitting Mongo's internal ID."""

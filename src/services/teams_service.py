@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from src.clients.teams_client import TeamsClient
+from src.bot.diagnostics.activity_logger import log_teams_debug, log_teams_debug_raw
 from src.repositories.discovered_channel_repository import DiscoveredChannelRepository
 from src.repositories.team_installation_repository import TeamInstallationRepository
 from src.schemas.teams import (
@@ -75,6 +76,25 @@ class TeamsService:
         self.destination_repository = destination_repository
         self.destination_service = destination_service
 
+    async def _upsert_discovered_channel(
+        self, channel: DiscoveredChannel, *, source: str
+    ) -> None:
+        """Persist a discovered channel while exposing its safe diagnostic lifecycle."""
+        fields = {
+            "tenant_id": channel.tenant_id,
+            "team_id": channel.team_id,
+            "channel_id": channel.channel_id,
+            "channel_name": channel.channel_name,
+            "conversation_id": channel.conversation_id,
+            "available": channel.available,
+            "discovery_source": source,
+        }
+        log_teams_debug("discovered channel upsert start", **fields)
+        log_teams_debug_raw("discovered channel before upsert", channel, **fields)
+        await self.channel_repository.upsert(channel)
+        log_teams_debug("discovered channel upsert complete", **fields)
+        log_teams_debug_raw("discovered channel after upsert", channel, **fields)
+
     async def _resolve_team_name(self, context: TeamsContext) -> str | None:
         """Resolve a missing team name from the persisted installation context."""
         if isinstance(context.team_name, str) and context.team_name.strip():
@@ -107,6 +127,11 @@ class TeamsService:
                 "team_id": context.team_id,
             },
         )
+        log_teams_debug(
+            "discovering team channels",
+            tenant_id=context.tenant_id,
+            team_id=context.team_id,
+        )
         channels = await self.client.get_team_channels(turn_context, context.team_id)
         channels = channels or []
         logger.info(
@@ -116,6 +141,26 @@ class TeamsService:
                 "team_id": context.team_id,
                 "channel_count": len(channels),
             },
+        )
+        channel_summaries = [
+            {
+                "channel_id": _value(channel, "id"),
+                "channel_name": _value(channel, "name", "display_name", "displayName"),
+            }
+            for channel in channels
+        ]
+        log_teams_debug(
+            "team channels discovered",
+            tenant_id=context.tenant_id,
+            team_id=context.team_id,
+            channel_count=len(channels),
+            channels=channel_summaries,
+        )
+        log_teams_debug_raw(
+            "TeamsInfo.get_team_channels response",
+            channels,
+            tenant_id=context.tenant_id,
+            team_id=context.team_id,
         )
         discovered: list[DiscoveredChannel] = []
         for channel in channels:
@@ -147,7 +192,7 @@ class TeamsService:
                 service_url=context.service_url,
                 available=True,
             )
-            await self.channel_repository.upsert(model)
+            await self._upsert_discovered_channel(model, source="TeamsInfo.get_team_channels")
             discovered.append(model)
         return discovered
 
@@ -180,7 +225,9 @@ class TeamsService:
             service_url=selected.service_url,
             available=True,
         )
-        await self.channel_repository.upsert(channel)
+        await self._upsert_discovered_channel(
+            channel, source="installation_selected_channel"
+        )
         logger.info(
             "teams_install_selected_channel_registered",
             extra={
@@ -238,7 +285,7 @@ class TeamsService:
             service_url=context.service_url,
             available=True,
         )
-        await self.channel_repository.upsert(channel)
+        await self._upsert_discovered_channel(channel, source="activity")
         logger.info(
             "teams_channel_activity_registered",
             extra={
@@ -362,7 +409,7 @@ class TeamsService:
             service_url=context.service_url,
             available=True,
         )
-        await self.channel_repository.upsert(channel)
+        await self._upsert_discovered_channel(channel, source="channelCreated")
         logger.info(
             "teams_discovered_channel_upserted",
             extra={
@@ -480,7 +527,23 @@ class TeamsService:
         )
         if not tenant_id or not team_id or not channel_id:
             return None
-        if not self._bot_is_member(activity_data, context.recipient_id, "membersAdded"):
+        member_ids = [
+            _clean_channel_name(_value(member, "id"))
+            for member in (activity_data.get("membersAdded") or activity_data.get("members_added") or [])
+        ]
+        bot_was_added = self._bot_is_member(activity_data, context.recipient_id, "membersAdded")
+        log_teams_debug(
+            "bot membership check",
+            bot_id=context.recipient_id,
+            added_member_ids=member_ids,
+            bot_was_added=bot_was_added,
+            members_added_exists=bool(member_ids),
+            tenant_id=tenant_id,
+            team_id=team_id,
+            channel_id=channel_id,
+            channel_name=channel_name,
+        )
+        if not bot_was_added:
             return None
 
         logger.info(
@@ -512,7 +575,7 @@ class TeamsService:
             service_url=context.service_url,
             available=True,
         )
-        await self.channel_repository.upsert(channel)
+        await self._upsert_discovered_channel(channel, source="channelMemberAdded")
 
         logger.info(
             "teams_bot_membership_channel_discovered",

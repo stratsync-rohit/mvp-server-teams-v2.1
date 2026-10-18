@@ -248,7 +248,31 @@ def test_installations_returns_unconnected_discovered_channels():
         ("team-1", False), ("test2", False)
     ]
     assert data[0].channels[0].is_primary is True
+    assert data[0].channels[0].channel_name == "General"
     assert data[0].channels[1].channel_name == "test2"
+
+
+def test_installations_does_not_name_non_primary_null_channel_general():
+    import asyncio
+
+    discovered = [
+        _discovered_channel("tenant-a", "team-1", "team-1", None),
+        _discovered_channel("tenant-a", "team-1", "test2", None),
+    ]
+    data = asyncio.run(_discovered_installation_service(discovered, []).list_installations())
+
+    assert data[0].channels[0].channel_name == "General"
+    assert data[0].channels[1].is_primary is False
+    assert data[0].channels[1].channel_name is None
+
+
+def test_installations_names_empty_primary_channel_general():
+    import asyncio
+
+    discovered = [_discovered_channel("tenant-a", "team-1", "team-1", "")]
+    data = asyncio.run(_discovered_installation_service(discovered, []).list_installations())
+
+    assert data[0].channels[0].channel_name == "General"
 
 
 def test_installations_marks_only_active_destination_as_connected():

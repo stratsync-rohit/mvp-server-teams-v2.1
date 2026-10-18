@@ -48,7 +48,7 @@ def test_activity_diagnostics_redact_secrets_and_extract_safe_context():
         "tenant": {"id": "tenant-1"}, "team": {"id": "team-1", "name": "Risk"},
     }}
 
-    assert sanitize_activity(payload)["token"] == "[REDACTED]"
+    assert sanitize_activity(payload)["token"] == "<redacted>"
     assert activity_metadata(payload)["tenant_id"] == "tenant-1"
     assert "authorization" not in activity_metadata(payload)
 

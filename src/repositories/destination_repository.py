@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from src.bot.diagnostics.activity_logger import log_teams_debug
 from src.repositories._base import MongoRepository, maybe_await, utcnow
 from src.schemas.destination import Destination, build_destination_id
 
@@ -11,17 +12,35 @@ class DestinationRepository(MongoRepository):
 
     collection_name = "destinations"
 
+    @staticmethod
+    def _write_status(result: Any) -> dict[str, Any]:
+        return {
+            "matched_count": getattr(result, "matched_count", None),
+            "modified_count": getattr(result, "modified_count", None),
+            "upserted": getattr(result, "upserted_id", None) is not None,
+        }
+
     async def upsert(self, destination: Destination | dict[str, Any]) -> None:
         """Persist one active destination keyed by tenant/team/channel."""
         data = destination.model_dump() if isinstance(destination, Destination) else dict(destination)
         data.setdefault("destination_id", build_destination_id(data["tenant_id"], data["team_id"], data["channel_id"]))
         created_at = data.pop("created_at", None) or utcnow()
         data["updated_at"] = utcnow()
-        await maybe_await(self.collection.update_one(
+        fields = {
+            "collection": self.collection_name,
+            "operation": "upsert",
+            "tenant_id": data["tenant_id"],
+            "team_id": data["team_id"],
+            "channel_id": data["channel_id"],
+            "destination_id": data["destination_id"],
+        }
+        log_teams_debug("mongo destination upsert", **fields)
+        result = await maybe_await(self.collection.update_one(
             {"destination_id": data["destination_id"]},
             {"$set": data, "$setOnInsert": {"created_at": created_at}},
             upsert=True,
         ))
+        log_teams_debug("mongo destination upsert complete", **fields, **self._write_status(result))
 
     async def get(self, destination_id: str) -> dict[str, Any] | None:
         """Fetch a destination by deterministic ID."""

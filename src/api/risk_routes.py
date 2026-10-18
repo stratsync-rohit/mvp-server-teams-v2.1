@@ -1,10 +1,16 @@
-"""Public read-only risk APIs."""
+"""Public risk APIs."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, status
 
-from src.schemas.risk import RiskDocument
+from src.schemas.risk import RiskCreateRequest, RiskDocument
 
 router = APIRouter(tags=["risks"])
+
+
+@router.post("/api/risks", response_model=RiskDocument, status_code=status.HTTP_201_CREATED)
+async def create_risk(payload: RiskCreateRequest, request: Request) -> RiskDocument:
+    """Create and return one active risk document."""
+    return await request.app.state.container.risk_service.create(payload)
 
 
 @router.get("/api/risks", response_model=list[RiskDocument])

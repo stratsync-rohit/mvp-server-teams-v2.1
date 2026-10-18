@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from src.bot.diagnostics.activity_logger import log_teams_debug, log_teams_debug_raw
 from src.clients.teams_conversation_client import TeamsConversationClient
 from src.exceptions import AppError
 from src.repositories.discovered_channel_repository import DiscoveredChannelRepository
@@ -44,6 +45,14 @@ class DestinationService:
 
         channel_name = channel.get("channel_name")
         is_primary = channel_id == team_id
+        destination_fields = {
+            "tenant_id": tenant_id,
+            "team_id": team_id,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "conversation_id": channel.get("conversation_id"),
+        }
+        log_teams_debug("destination resolution start", **destination_fields)
         logger.info(
             "teams_destination_connect_requested",
             extra={
@@ -63,6 +72,7 @@ class DestinationService:
         existing_active = _destination_value(existing, "is_active")
         was_inactive = existing is not None and existing_active is False
         existing_destination_id = _destination_value(existing, "destination_id")
+        log_teams_debug_raw("destination before resolution", existing, **destination_fields)
 
         reference = self.conversation_client.build_channel_reference(
             tenant_id=channel.get("tenant_id", ""),
@@ -95,6 +105,16 @@ class DestinationService:
             is_active=True,
         )
         await self.repository.upsert(destination)
+        configured_fields = {
+            **destination_fields,
+            "destination_id": destination.destination_id,
+        }
+        if existing is not None:
+            log_teams_debug("existing destination reused", **configured_fields)
+        else:
+            log_teams_debug("new destination created", **configured_fields)
+        log_teams_debug("destination configured", **configured_fields)
+        log_teams_debug_raw("destination after resolution", destination, **configured_fields)
         logger.info(
             "teams_destination_reactivated" if was_inactive else "teams_destination_connected",
             extra={
@@ -112,6 +132,17 @@ class DestinationService:
         required = ("tenant_id", "team_id", "channel_id")
         if any(not route.get(field) for field in required):
             return None
+        log_teams_debug(
+            "destination resolution start",
+            tenant_id=route.get("tenant_id"),
+            team_id=route.get("team_id"),
+            channel_id=route.get("channel_id"),
+            channel_name=route.get("channel_name"),
+            conversation_id=route.get("conversation_id"),
+        )
+        log_teams_debug_raw("destination before resolution", None,
+                            tenant_id=route.get("tenant_id"), team_id=route.get("team_id"),
+                            channel_id=route.get("channel_id"))
         reference = route.get("conversation_reference") or {
             "serviceUrl": route.get("service_url"),
             "conversation": {"id": route.get("conversation_id")},
@@ -126,6 +157,15 @@ class DestinationService:
         data.setdefault("conversation_id", resolved.get("conversation", {}).get("id"))
         destination = Destination(**data)
         await self.repository.upsert(destination)
+        log_teams_debug(
+            "destination configured",
+            tenant_id=destination.tenant_id,
+            team_id=destination.team_id,
+            channel_id=destination.channel_id,
+            channel_name=destination.channel_name,
+            destination_id=destination.destination_id,
+        )
+        log_teams_debug_raw("destination after resolution", destination)
         return destination
 
     async def get(self, destination_id: str) -> Destination | None:

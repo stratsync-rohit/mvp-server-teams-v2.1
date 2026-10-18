@@ -1,5 +1,7 @@
 """Tests for the public read-only risk APIs."""
 
+import re
+
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import Container
@@ -28,6 +30,9 @@ class RiskCollection:
             ),
             None,
         )
+
+    async def insert_one(self, document):
+        self.documents.append(dict(document))
 
 
 def _client(risks):
@@ -80,3 +85,61 @@ def test_get_missing_risk_returns_404():
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "RISK_NOT_FOUND"
+
+
+def test_create_risk_generates_id_and_persists_a_fetchable_document():
+    client = _client([])
+
+    response = client.post("/api/risks", json={
+        "title": "Late supplier delivery",
+        "severity": "high",
+    })
+
+    assert response.status_code == 201
+    created = response.json()
+    assert re.fullmatch(r"RSK-[A-Z0-9]{4}-[A-Z0-9]{4}", created["risk_id"])
+    assert created == {
+        "risk_id": created["risk_id"],
+        "title": "Late supplier delivery",
+        "severity": "high",
+        "is_active": True,
+    }
+
+    fetched = client.get(f"/api/risks/{created['risk_id']}")
+    assert fetched.status_code == 200
+    assert fetched.json() == created
+
+
+def test_create_risk_preserves_valid_supplied_risk_id():
+    response = _client([]).post("/api/risks", json={
+        "risk_id": "RSK-A1B2-C3D4",
+        "title": "Known identifier",
+    })
+
+    assert response.status_code == 201
+    assert response.json()["risk_id"] == "RSK-A1B2-C3D4"
+
+
+def test_create_risk_rejects_invalid_or_missing_required_payload_fields():
+    client = _client([])
+
+    missing_title = client.post("/api/risks", json={"severity": "high"})
+    invalid_title = client.post("/api/risks", json={"title": "   "})
+    invalid_risk_id = client.post("/api/risks", json={
+        "risk_id": "risk-1", "title": "Invalid identifier",
+    })
+
+    assert missing_title.status_code == 422
+    assert invalid_title.status_code == 422
+    assert invalid_risk_id.status_code == 422
+
+
+def test_create_risk_rejects_duplicate_risk_id():
+    response = _client([{
+        "risk_id": "RSK-A1B2-C3D4", "title": "Existing", "is_active": True,
+    }]).post("/api/risks", json={
+        "risk_id": "RSK-A1B2-C3D4", "title": "Duplicate",
+    })
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "RISK_ALREADY_EXISTS"

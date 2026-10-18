@@ -7,7 +7,11 @@ from botbuilder.core import TurnContext
 from botbuilder.core.teams import TeamsActivityHandler
 from botbuilder.schema import AdaptiveCardInvokeResponse
 
-from src.bot.diagnostics.activity_logger import log_activity
+from src.bot.diagnostics.activity_logger import (
+    activity_metadata,
+    log_activity,
+    log_teams_debug,
+)
 from src.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -35,6 +39,26 @@ class RiskBot(TeamsActivityHandler):
     async def on_turn(self, turn_context: TurnContext) -> None:
         """Log safe activity metadata, then use the SDK's normal dispatch."""
         activity = turn_context.activity
+        metadata = activity_metadata(activity)
+        members_added = metadata.get("members_added")
+        members_removed = metadata.get("members_removed")
+        log_teams_debug(
+            "bot handler entered",
+            **metadata,
+            members_added_present=bool(members_added),
+            members_removed_present=bool(members_removed),
+        )
+        activity_type = metadata.get("activity_type")
+        if activity_type == "message":
+            log_teams_debug("handling message", **metadata)
+        elif activity_type == "conversationUpdate":
+            log_teams_debug("handling conversationUpdate", **metadata)
+        elif activity_type == "installationUpdate":
+            log_teams_debug("handling installationUpdate", **metadata)
+        elif activity_type == "invoke":
+            log_teams_debug("handling invoke", **metadata)
+        elif activity_type == "event":
+            log_teams_debug("handling event", **metadata)
         activity_id = getattr(activity, "id", None)
         claimed = True
         if self.processed_activity_repository is not None and activity_id:
@@ -58,6 +82,7 @@ class RiskBot(TeamsActivityHandler):
     async def on_installation_update_add(self, turn_context: TurnContext) -> None:
         """Persist an installation and initiate channel discovery."""
         logger.info("teams_installation_added")
+        log_teams_debug("bot added detected", **activity_metadata(turn_context.activity))
         if self.installation_service is not None:
             await self.installation_service.add(turn_context)
 

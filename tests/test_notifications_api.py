@@ -129,6 +129,7 @@ def test_public_routes_include_expected_routes():
         ("POST", "/api/destinations/resolve"),
         ("POST", "/api/messages"),
         ("POST", "/api/notifications/send"),
+        ("POST", "/api/risks"),
     ]
 
 

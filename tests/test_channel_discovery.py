@@ -49,7 +49,7 @@ async def test_teams_client_debug_logs_raw_channel_fields_without_secrets(monkey
         if record.message == "teams_info_team_channels_returned"
     )
     assert record.raw_channel_fields == [{
-        "id": "buyer-id", "name": "buyer", "token": "[REDACTED]"
+        "id": "buyer-id", "name": "buyer", "token": "<redacted>"
     }]
 
 
