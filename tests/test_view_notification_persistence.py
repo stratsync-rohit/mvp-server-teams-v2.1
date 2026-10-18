@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.exceptions import AppError
+from src.schemas.destination import Destination
 from src.services.notification_service import NotificationService
 from src.services.reaction_service import ReactionService
 
@@ -59,6 +61,21 @@ def _turn_context():
     })
 
 
+class DestinationServiceDouble:
+    """Only an explicit active destination permits an in-context send."""
+
+    def __init__(self, destination=None):
+        self.destination = destination or Destination(
+            destination_id="tenant-authenticated:team-authenticated:channel-authenticated",
+            tenant_id="tenant-authenticated",
+            team_id="team-authenticated",
+            channel_id="channel-authenticated",
+        )
+
+    async def get(self, destination_id):
+        return self.destination if self.destination.destination_id == destination_id else None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("view_type", ["details", "mitigation"])
 async def test_view_send_persists_pending_then_real_message_id(view_type):
@@ -66,7 +83,7 @@ async def test_view_send_persists_pending_then_real_message_id(view_type):
     conversation_client = ConversationClientDouble(
         result=SimpleNamespace(id=f"{view_type}-message-1")
     )
-    service = NotificationService(repository, object(), conversation_client)
+    service = NotificationService(repository, DestinationServiceDouble(), conversation_client)
     card = {"contentType": "application/vnd.microsoft.card.adaptive", "content": {}}
 
     notification_id = await service.send_in_context(
@@ -94,7 +111,7 @@ async def test_view_send_provider_failure_marks_notification_failed_safely():
     repository = NotificationRepositoryDouble()
     service = NotificationService(
         repository,
-        object(),
+        DestinationServiceDouble(),
         ConversationClientDouble(error=RuntimeError("provider token must not persist")),
     )
 
@@ -106,6 +123,27 @@ async def test_view_send_provider_failure_marks_notification_failed_safely():
     assert repository.events == ["pending", "failed"]
     assert repository.failed[0][1] == "RuntimeError: outbound notification failed"
     assert "token" not in repository.failed[0][1]
+
+
+@pytest.mark.asyncio
+async def test_view_send_rejects_an_unconfigured_channel():
+    service = NotificationService(
+        NotificationRepositoryDouble(),
+        DestinationServiceDouble(destination=Destination(
+            destination_id="tenant-authenticated:team-authenticated:another-channel",
+            tenant_id="tenant-authenticated",
+            team_id="team-authenticated",
+            channel_id="another-channel",
+        )),
+        ConversationClientDouble(),
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.send_in_context(
+            _turn_context(), {}, risk_id="RSK-1", view_type="details"
+        )
+
+    assert error.value.code == "DESTINATION_NOT_FOUND"
 
 
 @pytest.mark.asyncio

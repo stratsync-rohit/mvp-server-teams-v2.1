@@ -51,6 +51,21 @@ class DestinationRepository:
     async def get(self, destination_id):
         return self.saved.get(destination_id)
 
+    async def get_by_channel(self, tenant_id, team_id, channel_id):
+        return next(
+            (
+                destination
+                for destination in self.saved.values()
+                if (destination.tenant_id, destination.team_id, destination.channel_id)
+                == (tenant_id, team_id, channel_id)
+            ),
+            None,
+        )
+
+    async def mark_inactive_for_channel(self, tenant_id, team_id, channel_id):
+        destination = self.saved[f"{tenant_id}:{team_id}:{channel_id}"]
+        destination.is_active = False
+
 
 class ConversationClient:
     """Provider-boundary double that records the trusted route."""
@@ -111,6 +126,26 @@ async def test_repeated_resolution_is_idempotent_and_channels_are_distinct():
 
 
 @pytest.mark.asyncio
+async def test_reconfiguration_preserves_the_existing_persisted_destination_id():
+    channel_repository = ChannelRepository({("tenant-1", "team-1", "channel-1"): _channel()})
+    destination_repository = DestinationRepository()
+    existing = Destination(
+        destination_id="persisted-destination-id",
+        tenant_id="tenant-1",
+        team_id="team-1",
+        channel_id="channel-1",
+        is_active=False,
+    )
+    destination_repository.saved[existing.destination_id] = existing
+    service = DestinationService(destination_repository, ConversationClient(), channel_repository)
+
+    destination = await service.resolve_discovered_channel("tenant-1", "team-1", "channel-1")
+
+    assert destination.destination_id == "persisted-destination-id"
+    assert set(destination_repository.saved) == {"persisted-destination-id"}
+
+
+@pytest.mark.asyncio
 async def test_unknown_and_unavailable_channels_are_rejected():
     destination_repository = DestinationRepository()
     service = DestinationService(
@@ -165,6 +200,33 @@ def test_route_accepts_only_identifiers_and_returns_safe_metadata():
     assert "attacker" not in response.text
 
 
+def test_destination_disconnect_route_disables_only_the_selected_destination():
+    captured = []
+
+    class DestinationServiceDouble:
+        async def deactivate(self, destination_id):
+            captured.append(destination_id)
+            return Destination(
+                destination_id=destination_id,
+                tenant_id="tenant-1",
+                team_id="team-1",
+                channel_id="channel-1",
+                is_configured=False,
+                is_active=False,
+            )
+
+    app = create_app()
+    app.state.container = Container(
+        adapter=object(), bot=object(), destination_service=DestinationServiceDouble()
+    )
+    response = TestClient(app).delete("/api/destinations/tenant-1:team-1:channel-1")
+
+    assert response.status_code == 200
+    assert captured == ["tenant-1:team-1:channel-1"]
+    assert response.json()["data"]["is_configured"] is False
+    assert response.json()["data"]["is_active"] is False
+
+
 def test_sdk_client_builds_channel_specific_reference():
     client = TeamsConversationClient(object(), "bot-1")
 
@@ -176,3 +238,16 @@ def test_sdk_client_builds_channel_specific_reference():
     assert reference["serviceUrl"] == "https://smba.example"
     assert reference["conversation"]["id"] == "channel-1"
     assert reference["conversation"]["tenantID"] == "tenant-1"
+
+
+@pytest.mark.asyncio
+async def test_disabling_destination_keeps_team_installation_out_of_scope():
+    channel_repository = ChannelRepository({("tenant-1", "team-1", "channel-1"): _channel()})
+    destination_repository = DestinationRepository()
+    service = DestinationService(destination_repository, ConversationClient(), channel_repository)
+    destination = await service.resolve_discovered_channel("tenant-1", "team-1", "channel-1")
+
+    disabled = await service.deactivate(destination.destination_id)
+
+    assert disabled.is_active is False
+    assert destination_repository.saved[destination.destination_id].is_active is False

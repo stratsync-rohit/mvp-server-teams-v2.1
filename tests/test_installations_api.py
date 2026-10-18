@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from src.api.dependencies import Container
 from src.application import create_app
 from src.schemas.installation import DiscoveredChannelResponse, InstallationResponse
+from src.services.destination_service import DestinationService
 from src.services.installation_service import InstallationService
 
 
@@ -28,11 +29,15 @@ def _installation(tenant_id: str, team_id: str) -> dict:
     }
 
 
-def _destination(tenant_id: str, team_id: str, channel_id: str, *, active: bool = True) -> dict:
+def _destination(
+    tenant_id: str, team_id: str, channel_id: str, *, active: bool = True,
+    destination_id: str | None = None,
+) -> dict:
     """Build a persistence-shaped destination fixture."""
     timestamp = datetime(2026, 9, 29, tzinfo=timezone.utc)
     return {
         "_id": "must-not-leak",
+        "destination_id": destination_id or f"{tenant_id}:{team_id}:{channel_id}",
         "tenant_id": tenant_id,
         "team_id": team_id,
         "channel_id": channel_id,
@@ -260,6 +265,137 @@ def test_installations_marks_only_active_destination_as_connected():
     assert [(channel.channel_id, channel.connected) for channel in data[0].channels] == [
         ("team-1", False), ("test2", True)
     ]
+    assert data[0].channels[1].destination_id == "tenant-a:team-1:test2"
+
+
+def test_installations_returns_the_matched_persisted_destination_id():
+    import asyncio
+
+    discovered = [_discovered_channel("tenant-a", "team-1", "risk", "Risk")]
+    data = asyncio.run(_discovered_installation_service(
+        discovered,
+        [_destination(
+            "tenant-a", "team-1", "risk", destination_id="stored-destination-id"
+        )],
+    ).list_installations())
+
+    channel = data[0].channels[0]
+    assert channel.is_configured is True
+    assert channel.destination_id == "stored-destination-id"
+
+
+def test_destination_routes_expose_and_clear_the_persisted_destination_id():
+    """Exercise resolve → installations → disconnect → installations via HTTP."""
+    class InstallationRepository:
+        async def list_active(self):
+            return [_installation("tenant-a", "team-1")]
+
+    class DiscoveredRepository:
+        documents = {
+            ("tenant-a", "team-1", "risk"): _discovered_channel(
+                "tenant-a", "team-1", "risk", "Risk"
+            ),
+            ("tenant-a", "team-1", "test"): _discovered_channel(
+                "tenant-a", "team-1", "test", "test"
+            ),
+            ("tenant-a", "team-1", "finance"): _discovered_channel(
+                "tenant-a", "team-1", "finance", "Finance"
+            ),
+        }
+
+        async def get(self, tenant_id, team_id, channel_id):
+            return self.documents.get((tenant_id, team_id, channel_id))
+
+        async def list_for_team(self, tenant_id, team_id):
+            return [
+                document for document in self.documents.values()
+                if document["tenant_id"] == tenant_id and document["team_id"] == team_id
+            ]
+
+    class DestinationRepository:
+        documents = {}
+
+        async def upsert(self, destination):
+            self.documents[destination.destination_id] = destination.model_dump()
+
+        async def get(self, destination_id):
+            return self.documents.get(destination_id)
+
+        async def get_by_channel(self, tenant_id, team_id, channel_id):
+            return next((
+                document for document in self.documents.values()
+                if (document["tenant_id"], document["team_id"], document["channel_id"])
+                == (tenant_id, team_id, channel_id)
+            ), None)
+
+        async def list_active_for_team(self, tenant_id, team_id):
+            return [
+                document for document in self.documents.values()
+                if document["tenant_id"] == tenant_id
+                and document["team_id"] == team_id
+                and document["is_active"] is True
+                and document["is_configured"] is True
+            ]
+
+        async def disable_for_channel(self, tenant_id, team_id, channel_id):
+            document = await self.get_by_channel(tenant_id, team_id, channel_id)
+            document["is_active"] = False
+            document["is_configured"] = False
+
+    class ConversationClient:
+        def build_channel_reference(self, **values):
+            return {
+                "serviceUrl": values["service_url"],
+                "conversation": {"id": values["channel_id"]},
+            }
+
+        async def resolve_conversation(self, reference):
+            return reference
+
+    installation_repository = InstallationRepository()
+    discovered_repository = DiscoveredRepository()
+    destination_repository = DestinationRepository()
+    destination_service = DestinationService(
+        destination_repository, ConversationClient(), discovered_repository
+    )
+    installation_service = InstallationService(
+        installation_repository,
+        object(),
+        destination_repository,
+        discovered_channel_repository=discovered_repository,
+    )
+    app = create_app()
+    app.state.container = Container(
+        adapter=object(),
+        bot=object(),
+        installation_service=installation_service,
+        destination_service=destination_service,
+    )
+    client = TestClient(app)
+
+    resolved = client.post("/api/destinations/resolve", json={
+        "tenant_id": "tenant-a", "team_id": "team-1", "channel_id": "risk",
+    })
+    assert resolved.status_code == 200
+    destination_id = resolved.json()["data"]["destination_id"]
+
+    configured = client.get("/api/installations")
+    risk = next(channel for channel in configured.json()["data"][0]["channels"]
+                if channel["channel_id"] == "risk")
+    test = next(channel for channel in configured.json()["data"][0]["channels"]
+                if channel["channel_id"] == "test")
+    assert (risk["is_configured"], risk["destination_id"]) == (True, destination_id)
+    assert test["destination_id"] is None
+
+    disconnected = client.delete(f"/api/destinations/{destination_id}")
+    assert disconnected.status_code == 200
+    after_disconnect = client.get("/api/installations")
+    installation = after_disconnect.json()["data"][0]
+    risk = next(channel for channel in installation["channels"] if channel["channel_id"] == "risk")
+    assert installation["installation_status_label"] == "Active"
+    assert (risk["is_configured"], risk["destination_id"], risk["status_label"]) == (
+        False, None, "Available"
+    )
 
 
 def test_installations_can_mark_primary_destination_connected():

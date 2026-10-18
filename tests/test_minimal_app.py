@@ -24,6 +24,35 @@ class StubBot:
         return None
 
 
+class PermissionDeniedAdapter:
+    async def process_activity(self, auth_header, activity, callback):
+        raise PermissionError("Required Authorization token was not supplied")
+
+
+class InvokeAdapter:
+    async def process_activity(self, auth_header, activity, callback):
+        return SimpleNamespace(status=200, body={"response": "ok"})
+
+
+def _messages_app(adapter):
+    app = create_app()
+    app.state.container = Container(adapter=adapter, bot=StubBot())
+    return app
+
+
+def _valid_activity():
+    return {
+        "type": "message",
+        "id": "activity-1",
+        "channelId": "msteams",
+        "serviceUrl": "https://smba.trafficmanager.net/emea/",
+        "conversation": {"id": "conversation-1"},
+        "from": {"id": "user-1"},
+        "recipient": {"id": "bot-1"},
+        "text": "hello",
+    }
+
+
 def test_health_and_readiness_are_dependency_free():
     client = TestClient(create_app())
 
@@ -48,9 +77,9 @@ def test_application_route_inventory_is_minimal():
 
 
 def test_messages_route_deserializes_and_delegates_with_authorization_header():
-    app = create_app()
     adapter = RecordingAdapter()
     bot = StubBot()
+    app = create_app()
     app.state.container = Container(adapter=adapter, bot=bot)
     client = TestClient(app)
 
@@ -60,16 +89,7 @@ def test_messages_route_deserializes_and_delegates_with_authorization_header():
             "Authorization": "Bearer test-token",
             "Content-Type": "application/json",
         },
-        json={
-            "type": "message",
-            "id": "activity-1",
-            "channelId": "msteams",
-            "serviceUrl": "https://smba.trafficmanager.net/emea/",
-            "conversation": {"id": "conversation-1"},
-            "from": {"id": "user-1"},
-            "recipient": {"id": "bot-1"},
-            "text": "hello",
-        },
+        json=_valid_activity(),
     )
 
     assert response.status_code == 201
@@ -79,6 +99,84 @@ def test_messages_route_deserializes_and_delegates_with_authorization_header():
     assert activity.type == "message"
     assert activity.id == "activity-1"
     assert callback.__self__ is bot
+
+
+def test_messages_route_maps_missing_authorization_to_unauthorized():
+    client = TestClient(_messages_app(PermissionDeniedAdapter()))
+
+    response = client.post("/api/messages", json=_valid_activity())
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "success": False,
+        "data": None,
+        "error": {
+            "code": "UNAUTHORIZED",
+            "message": "Bot Framework authentication failed.",
+        },
+    }
+
+
+def test_messages_route_maps_adapter_permission_error_to_unauthorized():
+    client = TestClient(_messages_app(PermissionDeniedAdapter()))
+
+    response = client.post(
+        "/api/messages",
+        headers={"Authorization": "Bearer invalid-token"},
+        json=_valid_activity(),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.parametrize(
+    ("content", "json_body"),
+    [
+        ("{not-json", None),
+        (None, {}),
+        (None, None),
+        (None, []),
+        (None, {"id": "activity-without-type"}),
+        (None, {"type": ""}),
+    ],
+)
+def test_messages_route_rejects_malformed_or_invalid_activity_bodies(content, json_body):
+    adapter = RecordingAdapter()
+    client = TestClient(_messages_app(adapter))
+    request = {
+        "headers": {"Authorization": "Bearer test-token", "Content-Type": "application/json"},
+    }
+    if content is not None:
+        request["content"] = content
+    else:
+        request["json"] = json_body
+
+    response = client.post("/api/messages", **request)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "success": False,
+        "data": None,
+        "error": {
+            "code": "INVALID_ACTIVITY",
+            "message": "Request body must be a valid Bot Framework activity.",
+        },
+    }
+    assert adapter.calls == []
+
+
+def test_messages_route_preserves_invoke_response():
+    client = TestClient(_messages_app(InvokeAdapter()))
+
+    response = client.post(
+        "/api/messages",
+        headers={"Authorization": "Bearer test-token"},
+        json=_valid_activity(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"response": "ok"}
 
 
 @pytest.mark.asyncio

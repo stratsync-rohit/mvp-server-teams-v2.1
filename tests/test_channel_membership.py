@@ -126,7 +126,7 @@ async def _seed_channel(discovered_repository, channel_id, channel_name):
 
 
 @pytest.mark.asyncio
-async def test_bot_added_to_secondary_channel_creates_only_that_destination_and_get_returns_both(caplog):
+async def test_bot_added_to_secondary_channel_discovers_it_without_configuring_it(caplog):
     teams, installations, discovered, destinations = _services()
     await _seed_installation(teams.installation_repository)
     await _seed_channel(discovered, "team-1", "rohit")
@@ -138,7 +138,7 @@ async def test_bot_added_to_secondary_channel_creates_only_that_destination_and_
         )
 
     connected = await destinations.list_active_for_team("tenant-1", "team-1")
-    assert {item["channel_id"] for item in connected} == {"team-1", "tet23-id"}
+    assert {item["channel_id"] for item in connected} == {"team-1"}
     assert (await discovered.get("tenant-1", "team-1", "tet23-id"))["channel_name"] == "tet23"
     channels = (await installations.list_installations())[0].channels
     assert {(channel.channel_id, channel.is_primary) for channel in channels} == {
@@ -146,9 +146,9 @@ async def test_bot_added_to_secondary_channel_creates_only_that_destination_and_
     }
     assert "teams_channel_member_added_received" in caplog.messages
     assert "teams_bot_added_to_channel" in caplog.messages
-    assert "teams_channel_destination_resolved" in caplog.messages
-    assert "teams_destination_connect_requested" in caplog.messages
-    assert "teams_destination_connected" in caplog.messages
+    assert "teams_bot_membership_channel_discovered" in caplog.messages
+    assert "teams_channel_destination_resolved" not in caplog.messages
+    assert "teams_destination_connect_requested" not in caplog.messages
 
 
 @pytest.mark.asyncio
@@ -165,18 +165,18 @@ async def test_human_member_added_does_not_create_destination():
 
 @pytest.mark.asyncio
 async def test_repeated_channel_member_added_is_idempotent():
-    teams, _, _, destinations = _services()
+    teams, _, discovered, destinations = _services()
     event = _event("tet23-id", "tet23", member_id="bot-id")
 
     await teams.handle_conversation_update(event)
     await teams.handle_conversation_update(event)
 
-    assert len(destinations.collection.documents) == 1
-    assert (await destinations.list_active_for_team("tenant-1", "team-1"))[0]["channel_id"] == "tet23-id"
+    assert len(discovered.collection.documents) == 1
+    assert await destinations.list_active_for_team("tenant-1", "team-1") == []
 
 
 @pytest.mark.asyncio
-async def test_channel_member_added_reactivates_existing_destination(caplog):
+async def test_channel_member_added_does_not_reactivate_existing_destination(caplog):
     teams, _, discovered, destinations = _services()
     await _seed_channel(discovered, "tet23-id", "tet23")
     await teams.destination_service.resolve_discovered_channel("tenant-1", "team-1", "tet23-id")
@@ -188,8 +188,8 @@ async def test_channel_member_added_reactivates_existing_destination(caplog):
         )
 
     destination = await destinations.get_by_channel("tenant-1", "team-1", "tet23-id")
-    assert destination["is_active"] is True
-    assert "teams_destination_reactivated" in caplog.messages
+    assert destination["is_active"] is False
+    assert "teams_destination_reactivated" not in caplog.messages
 
 
 @pytest.mark.asyncio

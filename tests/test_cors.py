@@ -83,6 +83,15 @@ def test_allowed_origin_can_preflight_each_post_api():
         assert response.headers["access-control-allow-origin"] == ALLOWED_ORIGIN
 
 
+def test_allowed_origin_can_preflight_destination_disconnect():
+    response = _preflight(
+        TestClient(create_app()), "/api/destinations/tenant:team:channel", method="DELETE"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == ALLOWED_ORIGIN
+
+
 def test_unconfigured_origin_is_not_granted_cors_access():
     response = TestClient(_app_with_installations()).options(
         "/api/installations",

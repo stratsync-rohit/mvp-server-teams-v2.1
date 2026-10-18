@@ -168,6 +168,19 @@ class NotificationService:
         destination_id = build_destination_id(
             context.tenant_id, context.team_id, context.channel_id
         )
+        destination = await self.destination_service.get(destination_id)
+        if destination is None:
+            raise AppError(
+                "DESTINATION_NOT_FOUND",
+                "The channel is not configured as a notification destination.",
+                404,
+            )
+        if not destination.is_active:
+            raise AppError(
+                "DESTINATION_UNAVAILABLE",
+                "The channel is not available for sending.",
+                409,
+            )
         notification_id = str(uuid4())
         await self.repository.create({
             "notification_id": notification_id,

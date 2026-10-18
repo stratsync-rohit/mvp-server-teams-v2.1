@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from src.clients.teams_conversation_client import TeamsConversationClient
@@ -12,6 +13,13 @@ from src.repositories.destination_repository import DestinationRepository
 from src.schemas.destination import Destination, build_destination_id
 
 logger = logging.getLogger(__name__)
+
+
+def _destination_value(destination: Any, field: str) -> Any:
+    """Read a persisted destination field from a mapping or model."""
+    if isinstance(destination, Mapping):
+        return destination.get(field)
+    return getattr(destination, field, None)
 
 
 class DestinationService:
@@ -52,12 +60,9 @@ class DestinationService:
             if get_existing is not None
             else None
         )
-        existing_active = (
-            existing.get("is_active")
-            if isinstance(existing, dict)
-            else getattr(existing, "is_active", None)
-        )
+        existing_active = _destination_value(existing, "is_active")
         was_inactive = existing is not None and existing_active is False
+        existing_destination_id = _destination_value(existing, "destination_id")
 
         reference = self.conversation_client.build_channel_reference(
             tenant_id=channel.get("tenant_id", ""),
@@ -71,7 +76,14 @@ class DestinationService:
             raise AppError("DESTINATION_ROUTE_INVALID", "The Teams channel route could not be prepared.", 502)
 
         destination = Destination(
-            destination_id=build_destination_id(tenant_id, team_id, channel_id),
+            # Reconfiguration must keep the identifier already persisted for
+            # this canonical tenant/team/channel record.  It is the value the
+            # UI must later send to DELETE /api/destinations/{destination_id}.
+            destination_id=(
+                existing_destination_id
+                if isinstance(existing_destination_id, str) and existing_destination_id
+                else build_destination_id(tenant_id, team_id, channel_id)
+            ),
             tenant_id=tenant_id,
             team_id=team_id,
             channel_id=channel_id,
@@ -119,4 +131,31 @@ class DestinationService:
     async def get(self, destination_id: str) -> Destination | None:
         """Load a previously resolved destination."""
         data = await self.repository.get(destination_id)
+        if isinstance(data, Destination):
+            return data
         return Destination(**data) if data else None
+
+    async def deactivate(self, destination_id: str) -> Destination:
+        """Disable one configured channel without changing its Team install."""
+        destination = await self.get(destination_id)
+        if destination is None:
+            raise AppError("DESTINATION_NOT_FOUND", "The destination was not found.", 404)
+        disable = getattr(self.repository, "disable_for_channel", None)
+        mark_inactive = getattr(self.repository, "mark_inactive_for_channel", None)
+        if disable is None and mark_inactive is None:
+            raise AppError(
+                "DESTINATION_CONFIGURATION_ERROR",
+                "Destination deactivation is not configured.",
+                500,
+            )
+        deactivate = disable or mark_inactive
+        await deactivate(destination.tenant_id, destination.team_id, destination.channel_id)
+        logger.info(
+            "teams_destination_deactivated",
+            extra={
+                "tenant_id": destination.tenant_id,
+                "team_id": destination.team_id,
+                "channel_id": destination.channel_id,
+            },
+        )
+        return destination.model_copy(update={"is_active": False, "is_configured": False})

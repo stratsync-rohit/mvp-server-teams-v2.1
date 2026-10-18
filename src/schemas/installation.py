@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DiscoveredChannelResponse(BaseModel):
-    """Public-safe discovered channel metadata and connection status."""
+    """Public-safe available channel metadata and destination state."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -14,7 +14,13 @@ class DiscoveredChannelResponse(BaseModel):
     channel_name: str | None = None
     is_primary: bool = False
     is_active: bool = True
+    # ``connected`` is retained for API compatibility.  New clients should
+    # use ``is_configured``/``status_label`` so discovery is never rendered as
+    # an installation or destination.
     connected: bool = False
+    is_configured: bool = False
+    status_label: str = "Available"
+    destination_id: str | None = None
     team_id: str
     team_name: str | None = None
     tenant_id: str
@@ -36,6 +42,7 @@ class InstallationResponse(BaseModel):
     conversation_id: str | None = None
     service_url: str | None = None
     is_active: bool = True
+    installation_status_label: str = "Active"
     installed_at: datetime | None = None
     updated_at: datetime | None = None
     uninstalled_at: datetime | None = None

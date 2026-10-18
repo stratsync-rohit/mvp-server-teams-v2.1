@@ -50,6 +50,14 @@ class DestinationRepository:
         data = destination.model_dump()
         self.documents[data["destination_id"]] = data
 
+    async def get(self, destination_id):
+        return self.documents.get(destination_id)
+
+    async def disable_for_channel(self, tenant_id, team_id, channel_id):
+        destination = self.documents[f"{tenant_id}:{team_id}:{channel_id}"]
+        destination["is_configured"] = False
+        destination["is_active"] = False
+
     async def list_active_for_team(self, tenant_id, team_id):
         return [
             document for document in self.documents.values()
@@ -65,18 +73,20 @@ class DestinationRepository:
 
 
 class TeamsClient:
-    def __init__(self, include_primary=False):
+    def __init__(self, include_primary=False, channels=None):
         self.include_primary = include_primary
+        self.channels = channels
 
     async def get_team_channels(self, turn_context, team_id):
         primary = [SimpleNamespace(id="team-1", name=None)] if self.include_primary else [
             SimpleNamespace(id="general", name="General")
         ]
-        return [
+        default_channels = [
             *primary,
             SimpleNamespace(id="test2", name="test2"),
             SimpleNamespace(id="test3", name="test3"),
         ]
+        return self.channels if self.channels is not None else default_channels
 
 
 class ConversationClient:
@@ -90,10 +100,13 @@ class ConversationClient:
         return reference
 
 
-def _activity(selected_channel=None):
+def _activity(selected_channel=None, *, tenant_id="tenant-1", team_id="team-1"):
     channel_data = {
-        "tenant": {"id": "tenant-1"},
-        "team": {"id": "team-1", "name": "Risk Team"},
+        "tenant": {"id": tenant_id},
+        "team": {
+            "id": team_id,
+            "name": "Risk Team" if team_id == "team-1" else f"Risk Team {team_id}",
+        },
     }
     if selected_channel is not None:
         channel_data["settings"] = {"selectedChannel": selected_channel}
@@ -137,6 +150,37 @@ async def test_install_discovers_every_channel_without_creating_destination():
 
 
 @pytest.mark.asyncio
+async def test_team_installation_with_four_channels_creates_one_install_and_no_destinations():
+    installation_repository = InstallationRepository()
+    discovered_repository = DiscoveredRepository()
+    destination_repository = DestinationRepository()
+    teams_service = TeamsService(
+        TeamsClient(channels=[
+            SimpleNamespace(id="risk", name="Risk"),
+            SimpleNamespace(id="test", name="test"),
+            SimpleNamespace(id="finance", name="Finance"),
+            SimpleNamespace(id="general", name="General"),
+        ]),
+        discovered_repository,
+        installation_repository,
+        destination_repository,
+    )
+    service = InstallationService(
+        installation_repository, teams_service, destination_repository,
+        DestinationService(destination_repository, ConversationClient(), discovered_repository),
+        discovered_repository,
+    )
+
+    await service.add(_activity())
+
+    assert list(installation_repository.documents) == [("tenant-1", "team-1")]
+    assert {key[2] for key in discovered_repository.documents} == {
+        "risk", "test", "finance", "general"
+    }
+    assert destination_repository.documents == {}
+
+
+@pytest.mark.asyncio
 async def test_install_without_selected_channel_creates_no_destination():
     service, discovered, destinations = _services()
 
@@ -170,6 +214,9 @@ async def test_installations_api_data_marks_primary_destination_without_inventin
         "is_primary": True,
         "is_active": True,
         "connected": True,
+        "is_configured": True,
+        "status_label": "Configured",
+        "destination_id": "tenant-1:team-1:team-1",
         "team_id": "team-1",
         "team_name": "Risk Team",
         "tenant_id": "tenant-1",
@@ -184,6 +231,9 @@ async def test_installations_api_data_marks_primary_destination_without_inventin
         "is_primary": False,
         "is_active": True,
         "connected": False,
+        "is_configured": False,
+        "status_label": "Available",
+        "destination_id": None,
         "team_id": "team-1",
         "team_name": "Risk Team",
         "tenant_id": "tenant-1",
@@ -198,6 +248,9 @@ async def test_installations_api_data_marks_primary_destination_without_inventin
         "is_primary": False,
         "is_active": True,
         "connected": False,
+        "is_configured": False,
+        "status_label": "Available",
+        "destination_id": None,
         "team_id": "team-1",
         "team_name": "Risk Team",
         "tenant_id": "tenant-1",
@@ -235,6 +288,31 @@ async def test_explicitly_resolving_another_channel_adds_only_that_destination()
 
 
 @pytest.mark.asyncio
+async def test_selecting_two_channels_creates_exactly_two_destinations():
+    service, _, destinations = _services()
+
+    await service.add(_activity())
+    await service.destination_service.resolve_discovered_channel("tenant-1", "team-1", "test2")
+    await service.destination_service.resolve_discovered_channel("tenant-1", "team-1", "test3")
+
+    configured = await destinations.list_active_for_team("tenant-1", "team-1")
+    assert {destination["channel_id"] for destination in configured} == {"test2", "test3"}
+
+
+@pytest.mark.asyncio
+async def test_multiple_team_destinations_remain_isolated():
+    service, _, destinations = _services()
+
+    await service.add(_activity(team_id="team-1"))
+    await service.add(_activity(team_id="team-2"))
+    await service.destination_service.resolve_discovered_channel("tenant-1", "team-1", "test2")
+    await service.destination_service.resolve_discovered_channel("tenant-1", "team-2", "test3")
+
+    assert {item["channel_id"] for item in await destinations.list_active_for_team("tenant-1", "team-1")} == {"test2"}
+    assert {item["channel_id"] for item in await destinations.list_active_for_team("tenant-1", "team-2")} == {"test3"}
+
+
+@pytest.mark.asyncio
 async def test_installation_list_returns_discovered_and_connection_status():
     service, _, destinations = _services()
 
@@ -247,16 +325,50 @@ async def test_installation_list_returns_discovered_and_connection_status():
 
 
 @pytest.mark.asyncio
+async def test_configure_then_disconnect_refreshes_channel_state_without_uninstalling_team():
+    service, _, _ = _services()
+    await service.add(_activity())
+
+    before = (await service.list_installations())[0]
+    assert before.installation_status_label == "Active"
+    assert [(channel.channel_name, channel.status_label) for channel in before.channels] == [
+        ("General", "Available"), ("test2", "Available"), ("test3", "Available")
+    ]
+
+    configured = await service.destination_service.resolve_discovered_channel(
+        "tenant-1", "team-1", "test2"
+    )
+    after_configure = (await service.list_installations())[0]
+    test2 = next(channel for channel in after_configure.channels if channel.channel_id == "test2")
+    test3 = next(channel for channel in after_configure.channels if channel.channel_id == "test3")
+    assert (test2.status_label, test2.is_configured, test2.destination_id) == (
+        "Configured", True, configured.destination_id
+    )
+    assert (test3.status_label, test3.is_configured) == ("Available", False)
+
+    await service.destination_service.deactivate(configured.destination_id)
+    after_disconnect = (await service.list_installations())[0]
+    test2 = next(channel for channel in after_disconnect.channels if channel.channel_id == "test2")
+    assert after_disconnect.installation_status_label == "Active"
+    assert (test2.status_label, test2.is_configured, test2.destination_id) == (
+        "Available", False, None
+    )
+
+
+@pytest.mark.asyncio
 async def test_uninstall_deactivates_destinations_without_deleting_them():
     service, _, destinations = _services()
 
     await service.add(_activity({"id": "test2", "name": "test2"}))
+    await service.add(_activity({"id": "test3", "name": "test3"}, team_id="team-2"))
     await service.destination_service.resolve_discovered_channel("tenant-1", "team-1", "test2")
-    destination_id = next(iter(destinations.documents))
+    await service.destination_service.resolve_discovered_channel("tenant-1", "team-2", "test3")
+    destination_id = "tenant-1:team-1:test2"
     await service.remove(_activity())
 
     assert destinations.documents[destination_id]["is_active"] is False
     assert await destinations.list_active_for_team("tenant-1", "team-1") == []
+    assert {item["channel_id"] for item in await destinations.list_active_for_team("tenant-1", "team-2")} == {"test3"}
 
 
 @pytest.mark.asyncio

@@ -455,7 +455,12 @@ class TeamsService:
         context: TeamsContext,
         channel_data: Mapping[str, Any],
     ) -> None:
-        """Connect only the channel where the bot itself was added."""
+        """Record bot channel context as discovery, never as configuration.
+
+        Teams can report the bot as a member while the app is installed at
+        team scope.  That makes the channel available to StratSync, but is
+        not an explicit user choice of a notification destination.
+        """
         channel = _as_mapping(channel_data.get("channel"))
         tenant_id = _clean_channel_name(context.tenant_id)
         team_id = _clean_channel_name(context.team_id)
@@ -509,44 +514,13 @@ class TeamsService:
         )
         await self.channel_repository.upsert(channel)
 
-        if self.destination_service is None:
-            return None
-        try:
-            destination = await self.destination_service.resolve_discovered_channel(
-                tenant_id, team_id, channel_id
-            )
-        except Exception:
-            logger.exception(
-                "teams_channel_destination_resolution_failed",
-                extra={
-                    "tenant_id": tenant_id,
-                    "team_id": team_id,
-                    "channel_id": channel_id,
-                    "channel_name": channel_name,
-                    "is_primary": is_primary,
-                },
-            )
-            return None
-        if destination is None:
-            logger.error(
-                "teams_channel_destination_resolution_failed",
-                extra={
-                    "tenant_id": tenant_id,
-                    "team_id": team_id,
-                    "channel_id": channel_id,
-                    "channel_name": channel_name,
-                    "is_primary": is_primary,
-                },
-            )
-            return None
-
         logger.info(
-            "teams_channel_destination_resolved",
+            "teams_bot_membership_channel_discovered",
             extra={
                 "tenant_id": tenant_id,
                 "team_id": team_id,
                 "channel_id": channel_id,
-                "channel_name": _value(destination, "channel_name") or channel_name,
+                "channel_name": channel.channel_name,
                 "is_primary": is_primary,
             },
         )

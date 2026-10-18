@@ -55,6 +55,20 @@ class DestinationRepository(MongoRepository):
             upsert=False,
         ))
 
+    async def disable_for_channel(
+        self, tenant_id: str, team_id: str, channel_id: str
+    ) -> None:
+        """Disable an explicitly removed destination without touching its Team."""
+        await maybe_await(self.collection.update_one(
+            {"tenant_id": tenant_id, "team_id": team_id, "channel_id": channel_id},
+            {"$set": {
+                "is_active": False,
+                "is_configured": False,
+                "updated_at": utcnow(),
+            }},
+            upsert=False,
+        ))
+
     async def list_active_for_team(
         self, tenant_id: str, team_id: str
     ) -> list[dict[str, Any]]:

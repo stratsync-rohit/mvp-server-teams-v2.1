@@ -46,6 +46,8 @@ Authorization header.
 | `GET` | `/ready` | Minimal application readiness |
 | `POST` | `/api/messages` | Authenticated Bot Framework activities |
 | `GET` | `/api/installations` | Read-only Teams installation inventory |
+| `POST` | `/api/destinations/resolve` | Explicitly configure one discovered channel as a notification destination |
+| `DELETE` | `/api/destinations/{destination_id}` | Disable one notification destination without uninstalling the Team app |
 
 FastAPI documentation remains available at `/docs`, `/redoc`, and
 `/openapi.json`.
@@ -100,6 +102,27 @@ https://YOUR_PUBLIC_HOST/api/messages
 ```
 
 Do not place secrets in source control.
+
+## Teams installation and destination semantics
+
+Teams installs the app at **Team scope**.  StratSync therefore stores exactly
+one installation per `(tenant_id, team_id)` and never treats a standard channel
+as a separate app installation.
+
+- Channel discovery stores available channels only; it does not create
+  destinations.
+- A notification destination is created only through
+  `POST /api/destinations/resolve` for a selected discovered channel.
+- `GET /api/installations` distinguishes the states for a destinations UI:
+  `installation_status_label: "Active"`, and for each channel either
+  `status_label: "Available"` or `status_label: "Configured"`.
+  `is_configured` is the boolean equivalent; the older `connected` field is
+  retained for compatibility.
+- Notification sends require an active configured destination.  Discovery or
+  a Team installation alone is insufficient.
+- Removing the Team app soft-deactivates that Team's destinations.  Removing
+  a destination only disables that destination (`is_configured: false`) and
+  leaves the Team app installed.
 
 ## Docker-first workflow
 

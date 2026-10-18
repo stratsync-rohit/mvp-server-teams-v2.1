@@ -1,6 +1,7 @@
 """Authenticated Microsoft Bot Framework activity endpoint."""
 
 import logging
+from collections.abc import Mapping
 
 from botbuilder.schema import Activity
 from fastapi import APIRouter, Request, Response, status
@@ -13,21 +14,55 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["bot"])
 
 
+def _invalid_activity_error() -> AppError:
+    """Return the safe public error for an unusable activity payload."""
+    return AppError(
+        "INVALID_ACTIVITY",
+        "Request body must be a valid Bot Framework activity.",
+        status.HTTP_400_BAD_REQUEST,
+    )
+
+
 @router.post("/api/messages")
 async def bot_messages(request: Request) -> Response:
     """Deserialize and authenticate one Bot Framework activity."""
     if "application/json" not in request.headers.get("content-type", "").lower():
         raise AppError("UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json.", 415)
-    body = await request.json()
+
+    try:
+        body = await request.json()
+    except (UnicodeDecodeError, ValueError):
+        logger.warning("bot_activity_invalid", extra={"reason": "malformed_json"})
+        raise _invalid_activity_error() from None
+
+    if not isinstance(body, Mapping) or not isinstance(body.get("type"), str) or not body["type"].strip():
+        logger.warning("bot_activity_invalid", extra={"reason": "invalid_shape"})
+        raise _invalid_activity_error()
+
+    try:
+        activity = Activity().deserialize(body)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        logger.warning("bot_activity_invalid", extra={"reason": "deserialization_failed"})
+        raise _invalid_activity_error() from None
+
     settings = getattr(request.app.state, "settings", None)
     log_activity(body, debug=bool(getattr(settings, "teams_debug_activity_logging", False)))
-    activity = Activity().deserialize(body)
     auth_header = request.headers.get("authorization", "")
     container = request.app.state.container
     try:
         invoke_response = await container.adapter.process_activity(
             auth_header, activity, container.bot.on_turn
         )
+    except PermissionError:
+        logger.warning(
+            "bot_framework_authentication_failed",
+            extra={"activity_id": activity.id, "activity_type": activity.type},
+        )
+        raise AppError(
+            "UNAUTHORIZED",
+            "Bot Framework authentication failed.",
+            status.HTTP_401_UNAUTHORIZED,
+        ) from None
     except Exception:
         logger.exception(
             "bot_activity_failed",

@@ -79,6 +79,11 @@ class InstallationService:
                     is_primary=channel_id == channel_team_id,
                     is_active=discovered.get("available", True),
                     connected=destination is not None,
+                    is_configured=destination is not None,
+                    status_label="Configured" if destination is not None else "Available",
+                    destination_id=(
+                        destination.get("destination_id") if destination else None
+                    ),
                     team_id=channel_team_id,
                     team_name=discovered.get("team_name") or installation.get("team_name"),
                     tenant_id=channel_tenant_id,
@@ -97,6 +102,9 @@ class InstallationService:
                 conversation_id=installation.get("conversation_id"),
                 service_url=installation.get("service_url"),
                 is_active=installation.get("is_active", True),
+                installation_status_label=(
+                    "Active" if installation.get("is_active", True) else "Inactive"
+                ),
                 installed_at=installation.get("installed_at"),
                 updated_at=installation.get("updated_at"),
                 uninstalled_at=installation.get("uninstalled_at"),

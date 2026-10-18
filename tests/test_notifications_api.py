@@ -117,6 +117,7 @@ def test_public_routes_include_expected_routes():
     )
 
     assert routes == [
+        ("DELETE", "/api/destinations/{destination_id}"),
         ("GET", "/api/installations"),
         ("GET", "/api/notifications"),
         ("GET", "/api/notifications/{notification_id}"),

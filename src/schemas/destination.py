@@ -23,6 +23,7 @@ class Destination(BaseModel):
     conversation_reference: dict[str, Any] | None = None
     service_url: str | None = None
     recipient_id: str | None = None
+    is_configured: bool = True
     is_active: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -60,11 +61,20 @@ class DestinationApiResponse(BaseModel):
     team_name: str | None = None
     channel_id: str
     channel_name: str | None = None
+    is_configured: bool = True
     is_active: bool = True
 
 
 class DestinationResolveResponse(BaseModel):
     """Response envelope for destination resolution."""
+
+    success: bool
+    data: DestinationApiResponse | None = None
+    error: object | None = None
+
+
+class DestinationDisconnectResponse(BaseModel):
+    """Response after disabling one configured notification destination."""
 
     success: bool
     data: DestinationApiResponse | None = None
