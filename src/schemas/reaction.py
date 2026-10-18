@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.schemas.notification import ReactionSummary
+from src.schemas.notification import AggregatedReaction, ReactionSummary
 
 
 class NotificationReaction(BaseModel):
@@ -35,11 +35,12 @@ class ReactionReadItem(BaseModel):
 
 
 class NotificationReactionsData(BaseModel):
-    """Reaction records and an active-only summary for one notification."""
+    """Current aggregate reactions plus optional per-user state records."""
 
     notification_id: str
     summary: ReactionSummary
-    reactions: list[ReactionReadItem] = Field(default_factory=list)
+    reactions: list[AggregatedReaction] = Field(default_factory=list)
+    reaction_states: list[ReactionReadItem] = Field(default_factory=list)
 
 
 class NotificationReactionsResponse(BaseModel):

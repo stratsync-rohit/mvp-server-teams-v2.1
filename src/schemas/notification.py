@@ -62,6 +62,15 @@ class ReactionSummary(BaseModel):
 
     total: int = 0
     counts: dict[str, int] = Field(default_factory=dict)
+    reactions: list["AggregatedReaction"] = Field(default_factory=list)
+
+
+class AggregatedReaction(BaseModel):
+    """One current Teams reaction type rendered as an emoji/count chip."""
+
+    reaction: str
+    emoji: str
+    count: int
 
 
 class NotificationListItem(BaseModel):

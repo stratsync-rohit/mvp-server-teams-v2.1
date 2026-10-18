@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import Container
@@ -115,6 +116,10 @@ def test_notification_list_is_safe_newest_first_filtered_and_batched():
     assert body["data"][0]["reaction_summary"] == {
         "total": 2,
         "counts": {"laugh": 1, "surprised": 1},
+        "reactions": [
+            {"reaction": "laugh", "emoji": "😆", "count": 1},
+            {"reaction": "surprised", "emoji": "😮", "count": 1},
+        ],
     }
     assert "mongo-new" not in response.text
     assert "must-not-leak" not in response.text
@@ -128,7 +133,9 @@ def test_notification_detail_supports_legacy_records_and_returns_404():
 
     assert detail.status_code == 200
     assert detail.json()["data"]["view_type"] is None
-    assert detail.json()["data"]["reaction_summary"] == {"total": 0, "counts": {}}
+    assert detail.json()["data"]["reaction_summary"] == {
+        "total": 0, "counts": {}, "reactions": [],
+    }
     assert missing.status_code == 404
 
 
@@ -146,8 +153,82 @@ def test_reactions_default_to_active_and_can_include_inactive():
     all_states = client.get("/api/notifications/one/reactions?include_inactive=true")
 
     assert len(active.json()["data"]["reactions"]) == 1
-    assert len(all_states.json()["data"]["reactions"]) == 2
+    assert len(all_states.json()["data"]["reaction_states"]) == 2
     assert all_states.json()["data"]["summary"] == {
         "total": 1,
         "counts": {"heart": 1},
+        "reactions": [{"reaction": "heart", "emoji": "❤️", "count": 1}],
     }
+
+
+def test_reaction_aggregate_counts_every_active_type_and_user():
+    documents = [_notification("one", view_type="details")]
+    records = [
+        {"notification_id": "one", "reaction": "like", "user_aad_id": "u1", "is_active": True},
+        {"notification_id": "one", "reaction": "like", "user_aad_id": "u2", "is_active": True},
+        {"notification_id": "one", "reaction": "like", "user_aad_id": "u3", "is_active": True},
+        {"notification_id": "one", "reaction": "heart", "user_aad_id": "u4", "is_active": True},
+        {"notification_id": "one", "reaction": "heart", "user_aad_id": "u5", "is_active": True},
+        {"notification_id": "one", "reaction": "laugh", "user_aad_id": "u6", "is_active": True},
+    ]
+
+    response = _client(documents, records).get("/api/notifications/one/reactions")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reactions"] == [
+        {"reaction": "like", "emoji": "👍", "count": 3},
+        {"reaction": "heart", "emoji": "❤️", "count": 2},
+        {"reaction": "laugh", "emoji": "😆", "count": 1},
+    ]
+
+
+def test_reaction_aggregate_omits_removed_and_inactive_reactions():
+    documents = [_notification("one", view_type="details")]
+    records = [
+        {"notification_id": "one", "reaction": "like", "user_aad_id": "u1", "is_active": True},
+        {"notification_id": "one", "reaction": "laugh", "user_aad_id": "u2", "is_active": True},
+        # These represent Teams reactionRemoved events and must not contribute.
+        {"notification_id": "one", "reaction": "heart", "user_aad_id": "u3", "is_active": False},
+        {"notification_id": "one", "reaction": "like", "user_aad_id": "u4", "is_active": False},
+    ]
+
+    response = _client(documents, records).get("/api/notifications/one/reactions")
+
+    data = response.json()["data"]
+    assert data["reactions"] == [
+        {"reaction": "like", "emoji": "👍", "count": 1},
+        {"reaction": "laugh", "emoji": "😆", "count": 1},
+    ]
+    assert "heart" not in data["summary"]["counts"]
+
+
+def test_reaction_aggregate_is_empty_when_notification_has_no_active_reactions():
+    response = _client([_notification("one")], [
+        {"notification_id": "one", "reaction": "heart", "user_aad_id": "u1", "is_active": False},
+    ]).get("/api/notifications/one/reactions")
+
+    assert response.json()["data"]["reactions"] == []
+    assert response.json()["data"]["summary"] == {
+        "total": 0, "counts": {}, "reactions": [],
+    }
+
+
+@pytest.mark.parametrize(("reaction", "emoji"), [
+    ("heart", "❤️"),
+    ("like", "👍"),
+    ("laugh", "😆"),
+    ("surprised", "😮"),
+    ("2714_heavycheckmark", "✅"),
+    ("2716_heavymultiplicationx", "❌"),
+    ("1f389_partypopper", "🎉"),
+    ("custom_teams_reaction", "custom_teams_reaction"),
+])
+def test_reaction_emoji_mapping_preserves_known_and_unknown_reaction_names(reaction, emoji):
+    response = _client([_notification("one")], [{
+        "notification_id": "one", "reaction": reaction, "user_aad_id": "u1", "is_active": True,
+    }]).get("/api/notifications/one/reactions")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reactions"] == [{
+        "reaction": reaction, "emoji": emoji, "count": 1,
+    }]

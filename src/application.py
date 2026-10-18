@@ -36,6 +36,7 @@ from src.services.installation_service import InstallationService
 from src.services.notification_service import NotificationService
 from src.services.risk_service import RiskService
 from src.services.risk_view_service import RiskViewService
+from src.services.generic_risk_view_builder import GenericRiskViewBuilder
 from src.services.reaction_service import ReactionService
 from src.services.teams_service import TeamsService
 from src.utils.logger import configure_logging
@@ -85,8 +86,11 @@ def create_app() -> FastAPI:
             reaction_repository=reaction_repository,
         )
         risk_service = RiskService(RiskRepository(mongo=mongo))
-        risk_card_renderer = TeamsRiskCardRenderer()
-        risk_view_service = RiskViewService(risk_service, risk_card_renderer)
+        generic_risk_view_builder = GenericRiskViewBuilder()
+        risk_card_renderer = TeamsRiskCardRenderer(generic_risk_view_builder)
+        risk_view_service = RiskViewService(
+            risk_service, risk_card_renderer, generic_risk_view_builder
+        )
         reaction_service = ReactionService(
             reaction_repository, notification_repository
         )

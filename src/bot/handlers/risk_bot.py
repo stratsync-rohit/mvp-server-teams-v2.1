@@ -59,11 +59,21 @@ class RiskBot(TeamsActivityHandler):
             log_teams_debug("handling invoke", **metadata)
         elif activity_type == "event":
             log_teams_debug("handling event", **metadata)
-        activity_id = getattr(activity, "id", None)
+        activity_id, activity_type, reaction_dedupe = self._dedupe_identity(activity)
         claimed = True
         if self.processed_activity_repository is not None and activity_id:
             claimed = await self.processed_activity_repository.claim(
-                activity_id, getattr(activity, "type", None)
+                activity_id, activity_type
+            )
+        if reaction_dedupe is not None:
+            log_teams_debug(
+                "messageReaction dedupe",
+                message_id=reaction_dedupe["message_id"],
+                user_id=reaction_dedupe["user_id"],
+                reactions_added=reaction_dedupe["reactions_added"],
+                reactions_removed=reaction_dedupe["reactions_removed"],
+                dedupe_key=activity_id,
+                claimed=claimed,
             )
         if not claimed:
             logger.info("bot_activity_duplicate_skipped", extra={"activity_id": activity_id})
@@ -78,6 +88,58 @@ class RiskBot(TeamsActivityHandler):
         else:
             if self.processed_activity_repository is not None and activity_id:
                 await self.processed_activity_repository.mark_completed(activity_id)
+
+    @staticmethod
+    def _dedupe_identity(activity: Any) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        """Return the processed-activity key, specializing Teams reaction events.
+
+        Teams uses the reacted-to message ID as ``activity.id`` for every
+        reaction.  A normal activity keeps that existing identity; a reaction
+        event uses the message, sender, and canonical add/remove payload so
+        separate reactions cannot suppress one another.
+        """
+        data = activity.serialize() if hasattr(activity, "serialize") else vars(activity)
+        if not isinstance(data, dict):
+            data = {}
+        activity_type = getattr(activity, "type", None) or data.get("type")
+        raw_activity_id = getattr(activity, "id", None) or data.get("id")
+        if activity_type != "messageReaction":
+            return raw_activity_id, activity_type, None
+
+        message_id = data.get("replyToId") or data.get("reply_to_id") or raw_activity_id
+        sender = data.get("from") or data.get("from_property") or {}
+        if not isinstance(sender, dict):
+            sender = {}
+        user_id = sender.get("aadObjectId") or sender.get("id") or "unknown"
+        added = RiskBot._reaction_types(data.get("reactionsAdded") or data.get("reactions_added"))
+        removed = RiskBot._reaction_types(data.get("reactionsRemoved") or data.get("reactions_removed"))
+        # Ordered canonical lists make SDK ordering irrelevant while retaining
+        # every entry in an activity that carries multiple reaction changes.
+        key = (
+            f"messageReaction:{message_id or 'unknown'}:{user_id}:"
+            f"add={','.join(sorted(added))}:remove={','.join(sorted(removed))}"
+        )
+        return key, activity_type, {
+            "message_id": message_id or "unknown",
+            "user_id": user_id,
+            "reactions_added": sorted(added),
+            "reactions_removed": sorted(removed),
+        }
+
+    @staticmethod
+    def _reaction_types(reactions: Any) -> list[str]:
+        """Extract reaction type names from raw or SDK-shaped reaction lists."""
+        if not isinstance(reactions, (list, tuple)):
+            return []
+        result = []
+        for reaction in reactions:
+            reaction_type = (
+                reaction.get("type") if isinstance(reaction, dict)
+                else getattr(reaction, "type", None)
+            )
+            if isinstance(reaction_type, str) and reaction_type:
+                result.append(reaction_type)
+        return result
 
     async def on_installation_update_add(self, turn_context: TurnContext) -> None:
         """Persist an installation and initiate channel discovery."""

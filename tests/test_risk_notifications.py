@@ -159,5 +159,6 @@ def test_renderer_degrades_gracefully_for_missing_optional_fields():
         "extra_field": "ignored",
     })
 
-    assert card["content"]["body"] == []
+    assert "Extra Field" in json.dumps(card)
+    assert "ignored" in json.dumps(card)
     assert "None" not in json.dumps(card)

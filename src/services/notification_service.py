@@ -11,6 +11,7 @@ from src.repositories.notification_repository import NotificationRepository
 from src.repositories.reaction_repository import ReactionRepository
 from src.schemas.destination import build_destination_id
 from src.schemas.notification import (
+    AggregatedReaction,
     NotificationDetail,
     NotificationListItem,
     ReactionSummary,
@@ -30,6 +31,19 @@ class NotificationService:
         self.destination_service = destination_service
         self.conversation_client = conversation_client
         self.reaction_repository = reaction_repository
+
+    _REACTION_EMOJIS = {
+        "like": "👍",
+        "heart": "❤️",
+        "laugh": "😆",
+        "surprised": "😮",
+        "2714_heavycheckmark": "✅",
+        "2716_heavymultiplicationx": "❌",
+        "1f389_partypopper": "🎉",
+        "sad": "😢",
+        "angry": "😡",
+    }
+    _REACTION_ORDER = {name: index for index, name in enumerate(_REACTION_EMOJIS)}
 
     async def list_notifications(
         self,
@@ -90,7 +104,8 @@ class NotificationService:
         return NotificationReactionsData(
             notification_id=notification.notification_id,
             summary=notification.reaction_summary,
-            reactions=[ReactionReadItem.model_validate(record) for record in records],
+            reactions=notification.reaction_summary.reactions,
+            reaction_states=[ReactionReadItem.model_validate(record) for record in records],
         )
 
     async def _summaries(self, notification_ids: list[str | None]) -> dict[str, ReactionSummary]:
@@ -109,6 +124,19 @@ class NotificationService:
             summary = summaries[notification_id]
             summary.counts[reaction] = summary.counts.get(reaction, 0) + 1
             summary.total += 1
+        for summary in summaries.values():
+            summary.reactions = [
+                AggregatedReaction(
+                    reaction=reaction,
+                    emoji=self._REACTION_EMOJIS.get(reaction, reaction),
+                    count=count,
+                )
+                for reaction, count in sorted(
+                    summary.counts.items(),
+                    key=lambda item: (self._REACTION_ORDER.get(item[0], len(self._REACTION_ORDER)), item[0]),
+                )
+                if count > 0
+            ]
         return summaries
 
     @staticmethod

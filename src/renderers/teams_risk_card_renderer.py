@@ -6,6 +6,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from src.services.generic_risk_view_builder import GenericRiskViewBuilder
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,8 +21,12 @@ class TeamsRiskCardRenderer:
         "low": "Good",
     }
 
+    def __init__(self, view_builder: GenericRiskViewBuilder | None = None) -> None:
+        self.view_builder = view_builder or GenericRiskViewBuilder()
+
     def render_notification(self, risk: Mapping[str, Any]) -> dict[str, Any]:
         """Render the notification view from the supplied risk mapping."""
+        risk = self.view_builder.build(risk)
         content = self._new_content()
         body: list[dict[str, Any]] = content["body"]
 
@@ -47,6 +53,7 @@ class TeamsRiskCardRenderer:
 
     def render_view(self, risk: Mapping[str, Any], view_name: str) -> dict[str, Any]:
         """Render one server-selected risk view using the same generic blocks."""
+        risk = self.view_builder.build(risk)
         content = self._new_content()
         body: list[dict[str, Any]] = content["body"]
         views = self._mapping(risk.get("views"))
