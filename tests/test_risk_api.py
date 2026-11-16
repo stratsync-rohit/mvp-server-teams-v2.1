@@ -1,6 +1,7 @@
 """Tests for the public read-only risk APIs."""
 
 import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -93,6 +94,8 @@ def test_create_risk_generates_id_and_persists_a_fetchable_document():
     response = client.post("/api/risks", json={
         "title": "Late supplier delivery",
         "severity": "high",
+        "reported_date": "2024-01-02T10:00:00Z",
+        "reported_timezone": "UTC",
     })
 
     assert response.status_code == 201
@@ -102,6 +105,8 @@ def test_create_risk_generates_id_and_persists_a_fetchable_document():
         "risk_id": created["risk_id"],
         "title": "Late supplier delivery",
         "severity": "high",
+        "reported_date": "2024-01-02T10:00:00Z",
+        "reported_timezone": "UTC",
         "is_active": True,
     }
 
@@ -114,10 +119,58 @@ def test_create_risk_preserves_valid_supplied_risk_id():
     response = _client([]).post("/api/risks", json={
         "risk_id": "RSK-A1B2-C3D4",
         "title": "Known identifier",
+        "reported_date": "2024-01-02T10:00:00+00:00",
+        "reported_timezone": "UTC",
     })
 
     assert response.status_code == 201
     assert response.json()["risk_id"] == "RSK-A1B2-C3D4"
+
+
+def test_create_risk_normalizes_creator_reported_date_to_utc_and_ignores_elapsed_time():
+    response = _client([]).post("/api/risks", json={
+        "title": "Timezone-aware alert",
+        "reported_date": "2024-01-02T10:00:00+05:30",
+        "reported_timezone": "Asia/Kolkata",
+        "elapsed_time": "999 days",
+    })
+
+    assert response.status_code == 201
+    created = response.json()
+    assert datetime.fromisoformat(created["reported_date"].replace("Z", "+00:00")) == datetime(
+        2024, 1, 2, 4, 30, tzinfo=timezone.utc
+    )
+    assert created["reported_timezone"] == "Asia/Kolkata"
+    assert "elapsed_time" not in created
+
+
+def test_create_risk_rejects_future_or_invalid_reported_date_values():
+    client = _client([])
+    future = client.post("/api/risks", json={
+        "title": "Future alert",
+        "reported_date": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "reported_timezone": "UTC",
+    })
+    naive = client.post("/api/risks", json={
+        "title": "Naive alert",
+        "reported_date": "2024-01-02T10:00:00",
+        "reported_timezone": "UTC",
+    })
+    invalid_timezone = client.post("/api/risks", json={
+        "title": "Unknown zone",
+        "reported_date": "2024-01-02T10:00:00+00:00",
+        "reported_timezone": "Mars/Olympus",
+    })
+    invalid_date = client.post("/api/risks", json={
+        "title": "Invalid date",
+        "reported_date": "not-a-date",
+        "reported_timezone": "UTC",
+    })
+
+    assert future.status_code == 422
+    assert naive.status_code == 422
+    assert invalid_timezone.status_code == 422
+    assert invalid_date.status_code == 422
 
 
 def test_create_risk_rejects_invalid_or_missing_required_payload_fields():
@@ -127,11 +180,17 @@ def test_create_risk_rejects_invalid_or_missing_required_payload_fields():
     invalid_title = client.post("/api/risks", json={"title": "   "})
     invalid_risk_id = client.post("/api/risks", json={
         "risk_id": "risk-1", "title": "Invalid identifier",
+        "reported_date": "2024-01-02T10:00:00+00:00",
+        "reported_timezone": "UTC",
+    })
+    missing_reported_date = client.post("/api/risks", json={
+        "title": "Missing report date", "reported_timezone": "UTC",
     })
 
     assert missing_title.status_code == 422
     assert invalid_title.status_code == 422
     assert invalid_risk_id.status_code == 422
+    assert missing_reported_date.status_code == 422
 
 
 def test_create_risk_rejects_duplicate_risk_id():
@@ -139,6 +198,8 @@ def test_create_risk_rejects_duplicate_risk_id():
         "risk_id": "RSK-A1B2-C3D4", "title": "Existing", "is_active": True,
     }]).post("/api/risks", json={
         "risk_id": "RSK-A1B2-C3D4", "title": "Duplicate",
+        "reported_date": "2024-01-02T10:00:00+00:00",
+        "reported_timezone": "UTC",
     })
 
     assert response.status_code == 409

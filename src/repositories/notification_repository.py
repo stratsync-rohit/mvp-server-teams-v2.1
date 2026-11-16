@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
+
+from pymongo import ReturnDocument
 
 from src.repositories._base import MongoRepository, maybe_await, utcnow
 
@@ -40,6 +42,26 @@ class NotificationRepository(MongoRepository):
     async def mark_sent(self, notification_id: str, teams_message_id: str | None) -> None:
         """Record successful provider delivery."""
         await self._mark(notification_id, "sent", teams_message_id=teams_message_id, error=None)
+
+    async def mark_sent_with_reference(
+        self,
+        notification_id: str,
+        teams_message_id: str | None,
+        message_reference: dict[str, Any] | None,
+    ) -> None:
+        """Finalize delivery and record whether the exact bot activity is editable."""
+        eligible = message_reference is not None
+        await self._mark(
+            notification_id,
+            "sent",
+            teams_message_id=teams_message_id,
+            message_reference=message_reference,
+            update_eligible=eligible,
+            update_state="eligible" if eligible else "missing_reference",
+            failure_count=0,
+            latest_update_error=None,
+            error=None,
+        )
 
     async def mark_failed(self, notification_id: str, error: str) -> None:
         """Record a failed delivery without hiding the retryable failure."""
@@ -108,6 +130,140 @@ class NotificationRepository(MongoRepository):
         if document is None:
             return None
         return {field: document[field] for field in self._READ_FIELDS if field != "_id" and field in document}
+
+    async def list_eligible_updates(self, checkpoint: datetime, *, limit: int) -> list[dict[str, Any]]:
+        """Load bounded sent notifications that have not succeeded this hour."""
+        now = utcnow()
+        query = {
+            "status": "sent",
+            "update_eligible": True,
+            "update_state": {"$in": ["eligible", "retryable"]},
+            "last_successful_checkpoint": {"$ne": checkpoint},
+            "$or": [
+                # MongoDB equality with null intentionally matches both a
+                # missing field and an explicitly persisted null. Successful
+                # updates write null, so $exists:false alone incorrectly
+                # stranded otherwise eligible notifications.
+                {"retry_next_at": None},
+                {"retry_next_at": {"$lte": now}},
+            ],
+        }
+        cursor = self.collection.find(query)
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("updated_at", 1)
+        if hasattr(cursor, "limit"):
+            cursor = cursor.limit(limit)
+        return (await self._collect(cursor))[:limit]
+
+    async def claim_update(
+        self, notification_id: str, checkpoint: datetime, owner: str, *, lease_seconds: int = 300
+    ) -> dict[str, Any] | None:
+        """Atomically claim one notification/checkpoint for a single worker."""
+        now = utcnow()
+        query = {
+            "notification_id": notification_id,
+            "status": "sent",
+            "update_eligible": True,
+            "last_successful_checkpoint": {"$ne": checkpoint},
+            "$or": [
+                {"update_claim": {"$exists": False}},
+                {"update_claim.expires_at": {"$lte": now}},
+                {"update_claim.owner": owner, "update_claim.checkpoint": checkpoint},
+            ],
+        }
+        update = {"$set": {
+            "update_claim": {
+                "owner": owner,
+                "checkpoint": checkpoint,
+                "idempotency_key": f"{notification_id}:{checkpoint.isoformat()}",
+                "expires_at": now + timedelta(seconds=lease_seconds),
+            },
+            "last_attempted_checkpoint": checkpoint,
+            "updated_at": now,
+        }}
+        return await maybe_await(self.collection.find_one_and_update(
+            query, update, return_document=ReturnDocument.AFTER
+        ))
+
+    async def mark_update_success(
+        self, notification_id: str, checkpoint: datetime, card: dict[str, Any], *, owner: str | None = None
+    ) -> None:
+        """Record one successful in-place update for its exact hour checkpoint."""
+        query: dict[str, Any] = {"notification_id": notification_id}
+        if owner is not None:
+            # A worker which lost an expired claim must not overwrite the
+            # outcome recorded by its replacement after a slow provider call.
+            query.update({"update_claim.owner": owner, "update_claim.checkpoint": checkpoint})
+        await maybe_await(self.collection.update_one(
+            query,
+            {"$set": {
+                "last_successful_checkpoint": checkpoint,
+                "last_update_at": utcnow(),
+                "last_attempted_checkpoint": checkpoint,
+                "update_state": "eligible",
+                "failure_count": 0,
+                "latest_update_error": None,
+                "retry_next_at": None,
+                "card": card,
+                "updated_at": utcnow(),
+            }, "$unset": {"update_claim": ""}},
+        ))
+
+    async def mark_update_failure(
+        self, notification_id: str, checkpoint: datetime, error: str, *, permanent: bool,
+        retry_at: datetime | None, owner: str | None = None,
+    ) -> None:
+        """Record sanitized update state without changing sent delivery history."""
+        query: dict[str, Any] = {"notification_id": notification_id}
+        if owner is not None:
+            query.update({"update_claim.owner": owner, "update_claim.checkpoint": checkpoint})
+        fields = {
+            "last_attempted_checkpoint": checkpoint,
+            "last_update_at": utcnow(),
+            "latest_update_error": error,
+            "update_state": "inactive" if permanent else "retryable",
+            "retry_next_at": retry_at,
+            "updated_at": utcnow(),
+        }
+        if permanent:
+            fields["update_eligible"] = False
+        await maybe_await(self.collection.update_one(
+            query,
+            {"$set": fields, "$inc": {"failure_count": 1}, "$unset": {"update_claim": ""}},
+        ))
+
+    async def next_retry_at(self, checkpoint: datetime) -> datetime | None:
+        """Return the first retry deadline for the active checkpoint.
+
+        The worker uses this after a cycle instead of querying eligible cards
+        every scheduler tick.  A restart can safely rediscover one deadline.
+        """
+        now = utcnow()
+        query = {
+            "status": "sent",
+            "update_eligible": True,
+            "update_state": {"$in": ["eligible", "retryable"]},
+            "last_successful_checkpoint": {"$ne": checkpoint},
+            "$or": [
+                # Include null/missing here as an immediately due update. It
+                # is important after a worker restart in the same checkpoint.
+                {"retry_next_at": None},
+                {"retry_next_at": {"$type": "date"}},
+            ],
+        }
+        cursor = self.collection.find(query)
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("retry_next_at", 1)
+        if hasattr(cursor, "limit"):
+            cursor = cursor.limit(1)
+        records = await self._collect(cursor)
+        if not records:
+            return None
+        value = records[0].get("retry_next_at")
+        # A null-or-missing deadline does not mean "no retry"; it means the
+        # notification is immediately eligible. Returning now lets the
+        # scheduler trigger the current checkpoint without polling Mongo.
+        return value if isinstance(value, datetime) else now
 
     @staticmethod
     async def _collect(cursor: Any) -> list[dict[str, Any]]:

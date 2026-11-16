@@ -39,6 +39,11 @@ class MongoManager:
             self.client = AsyncIOMotorClient(
                 self.settings.mongodb_url,
                 serverSelectionTimeoutMS=self.settings.mongodb_server_selection_timeout_ms,
+                connectTimeoutMS=self.settings.mongodb_connect_timeout_ms,
+                socketTimeoutMS=self.settings.mongodb_socket_timeout_ms,
+                # MongoDB stores datetimes as UTC instants; decode them as
+                # timezone-aware UTC values so reported_date remains usable.
+                tz_aware=True,
             )
         self.database = self.client[self.settings.mongodb_database]
         await self.ensure_indexes()
@@ -77,7 +82,12 @@ class MongoManager:
             "teams_installations": [[("tenant_id", 1), ("team_id", 1)]],
             "teams_discovered_channels": [[("tenant_id", 1), ("team_id", 1), ("channel_id", 1)]],
             "destinations": [[("destination_id", 1)], [("tenant_id", 1), ("team_id", 1), ("channel_id", 1)]],
-            "notifications": [[("teams_message_id", 1)], [("destination_id", 1), ("created_at", -1)]],
+            "notifications": [
+                [("teams_message_id", 1)],
+                [("destination_id", 1), ("created_at", -1)],
+                [("status", 1), ("update_eligible", 1), ("last_successful_checkpoint", 1)],
+            ],
+            "hourly_card_update_leases": [[("lease_name", 1)]],
             "notification_reactions": [[("notification_id", 1), ("reaction", 1), ("user_aad_id", 1)]],
             "processed_activities": [[("activity_id", 1)]],
             "risks": [[("risk_id", 1)]],
@@ -87,7 +97,7 @@ class MongoManager:
             for index in collection_indexes:
                 unique = collection_name in {
                     "teams_installations", "teams_discovered_channels", "destinations", "processed_activities",
-                    "risks",
+                    "risks", "hourly_card_update_leases",
                 }
                 try:
                     await collection.create_index(index, background=True, unique=unique)

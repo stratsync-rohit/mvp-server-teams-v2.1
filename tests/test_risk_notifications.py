@@ -119,7 +119,8 @@ def test_renderer_handles_dynamic_blocks_and_preserves_order(caplog):
     serialized = json.dumps(card)
     texts = _texts(card)
     assert card["contentType"] == "application/vnd.microsoft.card.adaptive"
-    assert card["content"]["version"] == "1.4"
+    assert card["content"]["version"] == "1.5"
+    assert card["content"]["msteams"] == {"width": "Full"}
     assert all(value in texts for value in (
         "HIGH", "Stored title", "Stored subtitle", "Stored summary",
         "Snapshot", "Warehouse", "East", "Demand", "500", "Lead time",
@@ -127,6 +128,7 @@ def test_renderer_handles_dynamic_blocks_and_preserves_order(caplog):
         "1. Review demand", "2. Contact supplier", "3. Update forecast",
     ))
     assert texts.index("Stored title") < texts.index("Snapshot") < texts.index("Review required")
+    assert not {"high", "low", "unknown"}.intersection(texts)
     assert "must-not-render" not in serialized
     assert "unsupported_risk_card_block" in caplog.text
 
@@ -145,11 +147,18 @@ def test_renderer_supports_changed_table_keys_without_code_changes():
         }]}}
     })
 
-    texts = _texts(card)
-    assert "Enterprise" in texts
-    assert "$90k" in texts
-    assert "Segment" in texts
-    assert "Exposure" in texts
+    table = next(item for item in card["content"]["body"] if item["type"] == "Table")
+    assert table["firstRowAsHeader"] is True
+    assert table["showGridLines"] is True
+    assert table["gridStyle"] == "default"
+    assert table["rows"][0]["type"] == "TableRow"
+    assert all(cell["type"] == "TableCell" for cell in table["rows"][0]["cells"])
+    assert [cell["items"][0]["text"] for cell in table["rows"][0]["cells"]] == [
+        "Segment", "Exposure"
+    ]
+    assert [cell["items"][0]["text"] for cell in table["rows"][1]["cells"]] == [
+        "Enterprise", "$90k"
+    ]
 
 
 def test_renderer_degrades_gracefully_for_missing_optional_fields():
@@ -161,4 +170,109 @@ def test_renderer_degrades_gracefully_for_missing_optional_fields():
 
     assert "Extra Field" in json.dumps(card)
     assert "ignored" in json.dumps(card)
-    assert "None" not in json.dumps(card)
+    assert "None" not in _texts(card)
+
+
+def test_renderer_renders_all_schema_v2_block_types_with_responsive_content():
+    long_text = "A detailed cross-functional update. " * 80
+    card = TeamsRiskCardRenderer().render_notification({
+        "risk_id": "RSK-SCHEMA-2",
+        "views": {"notification": {"blocks": [
+            {"type": "text", "text": long_text},
+            {"type": "callout", "title": "Escalation", "message": "Owner review needed", "status": "high"},
+            {"type": "metrics", "title": "Signals", "items": [
+                {"label": "Coverage", "value": "82%", "status": "good"},
+                {"label": "Variance", "value": "12%", "status": "warning"},
+            ]},
+            {"type": "key_value", "items": [
+                {"label": "Portfolio", "value": "Core services"},
+            ]},
+            {"type": "table", "title": "Wide dynamic table", "columns": [
+                {"key": "region", "label": "Region"},
+                {"key": "owner", "label": "Owner"},
+                {"key": "impact", "label": "Impact"},
+                {"key": "review_date", "label": "Review date"},
+            ], "rows": [{
+                "region": "APAC", "owner": "Operations", "impact": "High", "review_date": "2026-11-15",
+            }]},
+            {"type": "bullet_list", "title": "Watch", "items": ["New supplier", {"text": "Capacity"}]},
+            {"type": "numbered_list", "title": "Sequence", "items": [
+                {"order": 4, "text": "Confirm inputs"}, "Publish outcome",
+            ]},
+            {"type": "action_list", "title": "Actions", "items": [{"order": 1, "title": "Assign owner"}]},
+            {"type": "divider"},
+        ]}},
+    })
+
+    body = card["content"]["body"]
+    texts = _texts(card)
+    assert all(value in texts for value in (
+        long_text.strip(), "Escalation", "Owner review needed", "COVERAGE", "82%", "Portfolio",
+        "Core services", "Region", "APAC", "Owner", "Operations", "• New supplier", "• Capacity",
+        "4. Confirm inputs", "2. Publish outcome", "1. Assign owner",
+    ))
+    assert any(item["type"] == "FactSet" for item in body)
+    assert any(item["type"] == "ColumnSet" for item in body)
+    table = next(item for item in body if item["type"] == "Table")
+    assert table["showGridLines"] is True
+    assert [cell["items"][0]["text"] for cell in table["rows"][0]["cells"]] == [
+        "Region", "Owner", "Impact", "Review date"
+    ]
+    assert [cell["items"][0]["text"] for cell in table["rows"][1]["cells"]] == [
+        "APAC", "Operations", "High", "2026-11-15"
+    ]
+    assert any(item["type"] == "Container" and item.get("style") == "attention" for item in body)
+    assert {"type": "TextBlock", "text": " ", "separator": True, "spacing": "Medium"} in body
+    assert next(item for item in body if item.get("text") == long_text.strip())["wrap"] is True
+
+
+def test_renderer_omits_empty_view_actions_and_missing_block_values():
+    card = TeamsRiskCardRenderer().render_notification({
+        "risk_id": "RSK-EMPTY-VIEWS",
+        "views": {
+            "notification": {"blocks": [
+                {"type": "key_value", "items": [{"label": "Missing", "value": None}]},
+                {"type": "metrics", "items": [{"label": None, "value": None}]},
+                {"type": "table", "columns": ["Name"], "rows": [{"Name": None}]},
+                {"type": "text", "text": "Still renders safely"},
+            ]},
+            "details": {"title": "No useful detail", "blocks": [
+                {"type": "divider"}, {"type": "text", "text": None},
+            ]},
+            "mitigation": {"blocks": [{"type": "bullet_list", "items": ["Review source data"]}]},
+        },
+    })
+
+    assert [action["data"]["view"] for action in card["content"]["actions"]] == ["mitigation"]
+    assert "Still renders safely" in _texts(card)
+    assert "None" not in _texts(card)
+
+
+def test_renderer_preserves_dynamic_metric_fields_but_not_status_values():
+    card = TeamsRiskCardRenderer().render_notification({
+        "risk_id": "RSK-DYNAMIC-METRICS",
+        "views": {"notification": {"blocks": [{
+            "type": "metrics",
+            "title": "Delivery signals",
+            "items": [
+                {"actual": "80%", "target": "90%", "status": "warning"},
+                {"actual": "95%", "variance": "5%", "status": "good"},
+            ],
+        }]}},
+    })
+
+    body = card["content"]["body"]
+    metric_rows = [
+        item for item in body
+        if item["type"] == "ColumnSet" and len(item["columns"]) == 3
+    ]
+    assert [column["items"][0]["text"] for column in metric_rows[0]["columns"]] == [
+        "Actual", "Target", "Variance"
+    ]
+    assert [column["items"][0]["text"] for column in metric_rows[1]["columns"]] == [
+        "80%", "90%", "—"
+    ]
+    assert [column["items"][0]["text"] for column in metric_rows[2]["columns"]] == [
+        "95%", "—", "5%"
+    ]
+    assert not {"warning", "good"}.intersection(_texts(card))

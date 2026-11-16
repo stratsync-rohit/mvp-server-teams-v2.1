@@ -162,10 +162,29 @@ def test_valid_send_renders_database_risk_and_returns_safe_metadata():
     assert repository.created[0]["tenant_id"] == "tenant-1"
     assert repository.created[0]["team_id"] == "team-1"
     assert repository.created[0]["channel_id"] == "channel-1"
-    card_body = conversation_client.calls[0][1]["content"]["body"]
-    assert {item["text"] for item in card_body[:4]} == {
-        "HIGH", "Database Risk Title", "Database Risk Subtitle", "Database Risk Summary"
-    }
+    content = conversation_client.calls[0][1]["content"]
+    card_body = content["body"]
+    assert content["version"] == "1.5"
+    assert content["msteams"] == {"width": "Full"}
+    title_row = next(
+        item for item in card_body
+        if item["type"] == "ColumnSet"
+        and any(
+            text.get("text") == "Database Risk Title"
+            for column in item["columns"]
+            for text in column["items"]
+        )
+    )
+    assert {
+        text["text"]
+        for column in title_row["columns"]
+        for text in column["items"]
+    } == {"Database Risk Title", "HIGH"}
+    assert any(
+        item.get("text") == "Database Risk Subtitle" and item.get("isSubtle")
+        for item in card_body
+    )
+    assert any(item.get("text") == "Database Risk Summary" for item in card_body)
     assert repository.sent == [(body["data"]["notification_id"], "teams-message-1")]
 
 

@@ -165,7 +165,11 @@ class NotificationService:
         try:
             result = await self.conversation_client.send_activity(destination.conversation_reference, card)
             message_id = self._message_id(result)
-            await self.repository.mark_sent(notification_id, message_id)
+            message_reference = self._build_message_reference(
+                destination.conversation_reference, message_id,
+                destination.tenant_id, destination.channel_id,
+            )
+            await self._mark_sent(notification_id, message_id, message_reference)
             return notification_id
         except Exception as exc:
             await self.repository.mark_failed(notification_id, self._safe_error(exc))
@@ -224,11 +228,56 @@ class NotificationService:
         })
         try:
             result = await self.conversation_client.send_card_in_context(turn_context, card)
-            await self.repository.mark_sent(notification_id, self._message_id(result))
+            message_id = self._message_id(result)
+            await self._mark_sent(
+                notification_id,
+                message_id,
+                self._build_message_reference(
+                    self._turn_conversation_reference(turn_context), message_id,
+                    context.tenant_id, context.channel_id,
+                ),
+            )
             return notification_id
         except Exception as exc:
             await self.repository.mark_failed(notification_id, self._safe_error(exc))
             raise
+
+    async def _mark_sent(
+        self, notification_id: str, message_id: str | None, message_reference: dict[str, Any] | None
+    ) -> None:
+        """Persist update eligibility only after provider delivery succeeds."""
+        mark_with_reference = getattr(self.repository, "mark_sent_with_reference", None)
+        if mark_with_reference is not None:
+            await mark_with_reference(notification_id, message_id, message_reference)
+        else:  # Compatibility with narrow repository doubles and older adapters.
+            await self.repository.mark_sent(notification_id, message_id)
+
+    def _build_message_reference(
+        self, conversation_reference: dict[str, Any] | None, message_id: str | None,
+        tenant_id: str | None, channel_id: str | None,
+    ) -> dict[str, Any] | None:
+        builder = getattr(self.conversation_client, "build_message_reference", None)
+        if builder is None:
+            return None
+        return builder(
+            conversation_reference, message_id=message_id,
+            tenant_id=tenant_id, channel_id=channel_id,
+        )
+
+    @staticmethod
+    def _turn_conversation_reference(turn_context: Any) -> dict[str, Any] | None:
+        activity = getattr(turn_context, "activity", None)
+        serialized = activity.serialize() if hasattr(activity, "serialize") else activity
+        if not isinstance(serialized, dict):
+            return None
+        conversation = serialized.get("conversation")
+        if not isinstance(conversation, dict):
+            return None
+        return {
+            "channelId": serialized.get("channelId") or serialized.get("channel_id") or "msteams",
+            "serviceUrl": serialized.get("serviceUrl") or serialized.get("service_url"),
+            "conversation": conversation,
+        }
 
     @staticmethod
     def _message_id(result: Any) -> str | None:

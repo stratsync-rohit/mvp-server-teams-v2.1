@@ -125,7 +125,8 @@ def test_generic_notification_has_view_details_action_and_valid_adaptive_card_js
 
     assert card["contentType"] == "application/vnd.microsoft.card.adaptive"
     assert card["content"]["type"] == "AdaptiveCard"
-    assert card["content"]["version"] == "1.4"
+    assert card["content"]["version"] == "1.5"
+    assert card["content"]["msteams"] == {"width": "Full"}
     assert json.loads(json.dumps(card)) == card
     assert "Arbitrary Custom Field" in json.dumps(card)
     assert card["content"]["actions"] == [{
@@ -155,3 +156,5 @@ async def test_generic_details_view_is_available_without_explicit_views():
     assert "Region" in serialized
     assert "APAC" in serialized
     assert "1. 1" in serialized
+    assert card["content"]["version"] == "1.5"
+    assert card["content"]["msteams"] == {"width": "Full"}

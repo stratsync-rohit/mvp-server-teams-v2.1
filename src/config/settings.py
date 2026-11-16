@@ -41,8 +41,35 @@ class Settings(BaseSettings):
     mongodb_server_selection_timeout_ms: int = Field(
         default=2000, validation_alias="MONGODB_SERVER_SELECTION_TIMEOUT_MS"
     )
+    mongodb_connect_timeout_ms: int = Field(
+        default=3000, validation_alias="MONGODB_CONNECT_TIMEOUT_MS"
+    )
+    mongodb_socket_timeout_ms: int = Field(
+        default=5000, validation_alias="MONGODB_SOCKET_TIMEOUT_MS"
+    )
     teams_debug_activity_logging: bool = Field(
         default=False, validation_alias="TEAMS_DEBUG_ACTIVITY_LOGGING"
+    )
+    hourly_card_update_worker_enabled: bool = Field(
+        default=False, validation_alias="HOURLY_CARD_UPDATE_WORKER_ENABLED"
+    )
+    hourly_card_update_batch_size: int = Field(
+        default=100, ge=1, le=500, validation_alias="HOURLY_CARD_UPDATE_BATCH_SIZE"
+    )
+    hourly_card_update_heartbeat_seconds: int = Field(
+        default=30, ge=10, le=300, validation_alias="HOURLY_CARD_UPDATE_HEARTBEAT_SECONDS"
+    )
+    hourly_card_update_lease_seconds: int = Field(
+        default=90, ge=30, le=900, validation_alias="HOURLY_CARD_UPDATE_LEASE_SECONDS"
+    )
+    hourly_card_update_legacy_heartbeat_stale_seconds: int = Field(
+        default=180, ge=30, le=3600, validation_alias="HOURLY_CARD_UPDATE_LEGACY_HEARTBEAT_STALE_SECONDS"
+    )
+    hourly_card_update_owner_marker_path: str = Field(
+        default="/tmp/hourly-card-updater-owner", validation_alias="HOURLY_CARD_UPDATE_OWNER_MARKER_PATH"
+    )
+    teams_message_update_timeout_seconds: int = Field(
+        default=25, ge=1, le=120, validation_alias="TEAMS_MESSAGE_UPDATE_TIMEOUT_SECONDS"
     )
     cors_allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: DEFAULT_CORS_ALLOWED_ORIGINS.copy(),

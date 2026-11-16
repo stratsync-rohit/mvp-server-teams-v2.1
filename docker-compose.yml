@@ -20,6 +20,34 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+  hourly-card-updater:
+    build: .
+    profiles: ["hourly-updates"]
+    command: ["python", "-m", "src.workers.hourly_card_update_worker"]
+    env_file:
+      - .env
+    environment:
+      MICROSOFT_APP_TENANT_ID: ${MICROSOFT_APP_TENANT_ID:-${MICROSOFT_TENANT_ID}}
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongodb:27017}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-enterprise_risk_bot}
+      HOURLY_CARD_UPDATE_WORKER_ENABLED: "true"
+      HOURLY_CARD_UPDATE_BATCH_SIZE: ${HOURLY_CARD_UPDATE_BATCH_SIZE:-100}
+      HOURLY_CARD_UPDATE_HEARTBEAT_SECONDS: ${HOURLY_CARD_UPDATE_HEARTBEAT_SECONDS:-30}
+      HOURLY_CARD_UPDATE_LEASE_SECONDS: ${HOURLY_CARD_UPDATE_LEASE_SECONDS:-90}
+      HOURLY_CARD_UPDATE_LEGACY_HEARTBEAT_STALE_SECONDS: ${HOURLY_CARD_UPDATE_LEGACY_HEARTBEAT_STALE_SECONDS:-180}
+      TEAMS_MESSAGE_UPDATE_TIMEOUT_SECONDS: ${TEAMS_MESSAGE_UPDATE_TIMEOUT_SECONDS:-25}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.workers.hourly_card_update_healthcheck"]
+      interval: 30s
+      timeout: 5s
+      # A heartbeat is written every 30 seconds.  120 seconds allows one
+      # bounded Mongo/Teams operation and small Docker clock differences.
+      start_period: 120s
+      retries: 4
   mongodb:
     image: mongo:8.0
     ports:

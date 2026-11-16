@@ -11,6 +11,17 @@ from src.renderers.teams_risk_card_renderer import TeamsRiskCardRenderer
 from src.services.risk_view_service import RiskViewService
 
 
+def _texts(value):
+    if isinstance(value, dict):
+        texts = [value["text"]] if isinstance(value.get("text"), str) else []
+        for child in value.values():
+            texts.extend(_texts(child))
+        return texts
+    if isinstance(value, list):
+        return [text for child in value for text in _texts(child)]
+    return []
+
+
 def _risk():
     return {
         "_id": "must-not-leak",
@@ -76,12 +87,12 @@ def test_missing_view_omits_only_that_button_and_metric_status_is_not_visible():
     risk = _risk()
     risk["views"].pop("mitigation")
     card = TeamsRiskCardRenderer().render_notification(risk)
-    serialized = json.dumps(card)
+    texts = _texts(card)
 
     assert [action["data"]["view"] for action in card["content"]["actions"]] == ["details"]
-    assert "good" not in serialized
-    assert "Floor Price" in serialized
-    assert "S$60/unit" in serialized
+    assert "good" not in texts
+    assert "Floor Price" in texts
+    assert "S$60/unit" in texts
 
 
 class RiskServiceDouble:
@@ -116,6 +127,9 @@ async def test_risk_view_service_reloads_latest_details_and_mitigation_views():
         "1. Review demand", "2. Contact supplier", "3. Update forecast"
     ))
     assert "must-not-leak" not in json.dumps(details)
+    for card in (details, mitigation):
+        assert card["content"]["version"] == "1.5"
+        assert card["content"]["msteams"] == {"width": "Full"}
 
 
 @pytest.mark.asyncio

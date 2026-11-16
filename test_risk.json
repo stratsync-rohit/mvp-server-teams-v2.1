@@ -1,0 +1,320 @@
+
+{
+  "schema_version": 2,
+  "risk_id": "RSK-LOGI-1101",
+  "industry_name": "Logistics & Supply Chain",
+  "title": "Critical Delivery Disruption Across Regional Distribution Network",
+  "severity": "critical",
+  "severity_label": "Critical",
+  "subtitle": "Multiple high-priority shipments delayed by transport capacity shortages",
+  "entity_id": "REGION-WEST-04",
+  "entity_name": "Western Regional Distribution Network",
+  "sender": {
+    "source": "StratSync RRM",
+    "name": "Supply Chain Risk Monitor"
+  },
+  "summary": "A shortage of available transport vehicles and unexpected route disruptions have delayed several high-priority shipments. Customer delivery commitments and regional distribution performance are at risk.",
+  "reported_date": "2026-11-14T10:15:00+05:30",
+  "reported_timezone": "Asia/Kolkata",
+  "associated_risk_ids": [],
+  "views": {
+    "notification": {
+      "title": "Logistics Risk Notification",
+      "blocks": [
+        {
+          "type": "callout",
+          "title": "Critical Operational Alert",
+          "text": "Immediate intervention is required to avoid additional shipment delays and customer escalations.",
+          "status": "critical"
+        },
+        {
+          "type": "metrics",
+          "title": "Distribution Impact",
+          "columns": 4,
+          "items": [
+            {
+              "label": "Delayed Shipments",
+              "value": "42",
+              "status": "critical"
+            },
+            {
+              "label": "Affected Customers",
+              "value": "18",
+              "status": "warning"
+            },
+            {
+              "label": "Revenue Exposure",
+              "value": "$285,000",
+              "status": "critical"
+            },
+            {
+              "label": "Average Delay",
+              "value": "3.5 days",
+              "status": "warning"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "title": "High-Priority Shipment Overview",
+          "columns": [
+            {
+              "key": "shipment_id",
+              "label": "Shipment ID"
+            },
+            {
+              "key": "destination",
+              "label": "Destination"
+            },
+            {
+              "key": "delay",
+              "label": "Delay"
+            },
+            {
+              "key": "priority",
+              "label": "Priority"
+            }
+          ],
+          "rows": [
+            {
+              "shipment_id": "SHP-1042",
+              "destination": "Mumbai",
+              "delay": "4 days",
+              "priority": "Critical"
+            },
+            {
+              "shipment_id": "SHP-1058",
+              "destination": "Pune",
+              "delay": "3 days",
+              "priority": "High"
+            },
+            {
+              "shipment_id": "SHP-1071",
+              "destination": "Ahmedabad",
+              "delay": "5 days",
+              "priority": "Critical"
+            }
+          ]
+        },
+        {
+          "type": "bullet_list",
+          "title": "Immediate Concerns",
+          "items": [
+            "Transport capacity is below the required operating level.",
+            "High-priority customer commitments are at risk.",
+            "Current disruptions may affect next-day distribution schedules."
+          ]
+        }
+      ]
+    },
+    "details": {
+      "title": "Detailed Logistics Risk Assessment",
+      "subtitle": "Operational causes, affected routes, and projected business impact",
+      "action_label": "View Details",
+      "blocks": [
+        {
+          "type": "key_value",
+          "title": "Risk Information",
+          "items": [
+            {
+              "label": "Risk Category",
+              "value": "Logistics Disruption"
+            },
+            {
+              "label": "Affected Region",
+              "value": "Western India"
+            },
+            {
+              "label": "Current Status",
+              "value": "Active"
+            },
+            {
+              "label": "Primary Cause",
+              "value": "Vehicle shortage and route interruptions"
+            }
+          ]
+        },
+        {
+          "type": "metrics",
+          "title": "Operational Performance",
+          "columns": 3,
+          "items": [
+            {
+              "label": "On-Time Delivery Rate",
+              "value": "71%",
+              "status": "critical"
+            },
+            {
+              "label": "Available Vehicles",
+              "value": "23 / 40",
+              "status": "warning"
+            },
+            {
+              "label": "Impacted Routes",
+              "value": "7",
+              "status": "critical"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "title": "Regional Route Risk Breakdown",
+          "columns": [
+            {
+              "key": "route",
+              "label": "Route"
+            },
+            {
+              "key": "shipments",
+              "label": "Shipments"
+            },
+            {
+              "key": "delay",
+              "label": "Expected Delay"
+            },
+            {
+              "key": "risk_level",
+              "label": "Risk Level"
+            }
+          ],
+          "rows": [
+            {
+              "route": "Indore - Mumbai",
+              "shipments": 14,
+              "delay": "4 days",
+              "risk_level": "Critical"
+            },
+            {
+              "route": "Indore - Pune",
+              "shipments": 11,
+              "delay": "3 days",
+              "risk_level": "High"
+            },
+            {
+              "route": "Indore - Ahmedabad",
+              "shipments": 9,
+              "delay": "5 days",
+              "risk_level": "Critical"
+            },
+            {
+              "route": "Indore - Surat",
+              "shipments": 8,
+              "delay": "2 days",
+              "risk_level": "Medium"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "title": "Business Impact Assessment",
+          "text": "Prolonged delays could increase transportation costs, trigger customer penalties, and reduce service reliability. The logistics team must prioritize critical shipments."
+        },
+        {
+          "type": "bullet_list",
+          "title": "Primary Risk Drivers",
+          "items": [
+            "Unexpected vehicle availability constraints",
+            "High shipment volume across major routes",
+            "Insufficient backup transportation partners",
+            "Limited alternative routing capacity"
+          ]
+        }
+      ]
+    },
+    "mitigation": {
+      "title": "Logistics Risk Mitigation Plan",
+      "subtitle": "Actions to restore distribution performance",
+      "action_label": "Mitigation Plan",
+      "blocks": [
+        {
+          "type": "callout",
+          "title": "Recommended Response",
+          "text": "Prioritize critical shipments and activate additional transport capacity immediately.",
+          "status": "warning"
+        },
+        {
+          "type": "action_list",
+          "title": "Immediate Action Plan",
+          "items": [
+            {
+              "order": 1,
+              "title": "Activate backup transportation vendors",
+              "owner": "Logistics Manager",
+              "status": "pending"
+            },
+            {
+              "order": 2,
+              "title": "Prioritize high-value customer shipments",
+              "owner": "Distribution Operations Team",
+              "status": "pending"
+            },
+            {
+              "order": 3,
+              "title": "Recalculate delivery commitments",
+              "owner": "Planning Team",
+              "status": "pending"
+            },
+            {
+              "order": 4,
+              "title": "Notify affected customers",
+              "owner": "Customer Success Team",
+              "status": "pending"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "title": "Mitigation Ownership Tracker",
+          "columns": [
+            {
+              "key": "action",
+              "label": "Action"
+            },
+            {
+              "key": "owner",
+              "label": "Owner"
+            },
+            {
+              "key": "deadline",
+              "label": "Deadline"
+            },
+            {
+              "key": "status",
+              "label": "Status"
+            }
+          ],
+          "rows": [
+            {
+              "action": "Secure 15 backup vehicles",
+              "owner": "Fleet Operations",
+              "deadline": "Within 6 hours",
+              "status": "Pending"
+            },
+            {
+              "action": "Reassign critical shipments",
+              "owner": "Distribution Team",
+              "deadline": "Within 3 hours",
+              "status": "Pending"
+            },
+            {
+              "action": "Publish revised ETA",
+              "owner": "Planning Team",
+              "deadline": "Within 8 hours",
+              "status": "Pending"
+            }
+          ]
+        },
+        {
+          "type": "numbered_list",
+          "title": "Recovery Strategy",
+          "items": [
+            "Restore critical route capacity.",
+            "Clear the highest-priority shipment backlog.",
+            "Monitor delivery performance hourly.",
+            "Review remaining transport capacity and close the risk when operations stabilize."
+          ]
+        }
+      ]
+    }
+  }
+}

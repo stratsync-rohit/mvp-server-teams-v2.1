@@ -160,6 +160,56 @@ The previous Mongo volume is intentionally not referenced by this baseline.
 Do not run `docker compose down -v`; historical data remains available for a
 later learning step.
 
+## Risk timing and hourly card updates
+
+Alert creators must supply `reported_date` as an ISO-8601 timestamp with an
+offset and `reported_timezone` as an IANA timezone when creating a risk. The
+backend stores the timestamp as UTC and recalculates the displayed elapsed time
+whenever it renders a notification, Details, or Mitigation card. Client-sent
+`elapsed_time` is ignored.
+
+## Hourly card updates
+
+The opt-in `hourly-card-updater` Compose profile refreshes eligible, bot-authored
+notification cards at each completed UTC hour. It persists the exact returned
+activity ID plus a sanitized conversation reference only after the original send
+succeeds. The worker uses the same authenticated CloudAdapter configuration as
+the API, starts a proactive conversation, and calls Bot Framework
+`TurnContext.update_activity`; it never posts a replacement message.
+
+Enable it explicitly:
+
+```bash
+docker compose --profile hourly-updates up -d --build
+```
+
+Each run takes a Mongo-backed lease, atomically claims each
+`notification_id:hour-checkpoint`, and records success, retryable failures, or
+terminal inaccessible-reference failures. Legacy records without a complete
+message reference are skipped. The worker processes only the current checkpoint
+after a restart, so it does not replay stale hourly content.
+
+### Manual Teams verification
+
+1. Resolve a channel destination and send a new risk notification.
+2. Confirm the notification record has `status: sent`, a `teams_message_id`,
+   and `update_eligible: true`; never add these fields manually.
+3. Enable the Compose profile, wait for the next UTC hour, and confirm the same
+   Teams message updates its elapsed time while retaining its activity ID,
+   Actions, native tables, and full-width card layout.
+4. Confirm no second channel message was created. Disable the profile after the
+   test with `docker compose --profile hourly-updates stop hourly-card-updater`.
+
+### Rollback and troubleshooting
+
+Disable the worker profile (or set `HOURLY_CARD_UPDATE_WORKER_ENABLED=false`) to
+stop future updates without changing sent cards or deleting notification data.
+Inspect `update_state`, `latest_update_error`, and `failure_count` on the
+notification record. Authorization, deleted-message, and invalid-reference
+failures become terminal/inactive; transient failures retain a backoff timestamp
+for retry. Live Teams behavior remains an integration verification step because
+host permissions and tenant policy cannot be proven by mocked unit tests.
+
 ## Internal persistence
 
 MongoDB is started by Docker Compose with the named `mongodb_data` volume.
